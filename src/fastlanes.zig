@@ -83,7 +83,9 @@ pub fn FastLanez_U64(comptime T: type) type {
         pub fn subtract(a: Lane, b: Lane) Lane {
             const a_vec: @Vector(64 / @bitSizeOf(T), T) = @bitCast(a);
             const b_vec: @Vector(64 / @bitSizeOf(T), T) = @bitCast(b);
-            return @bitCast(b_vec - a_vec);
+            const std = @import("std");
+            std.debug.print("{} - {}\n", .{ a_vec, b_vec });
+            return @bitCast(a_vec - b_vec);
         }
     };
 }
