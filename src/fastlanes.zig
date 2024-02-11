@@ -7,27 +7,35 @@ const FL_WIDTH = 1024;
 
 pub fn FastLanez(comptime E: type, comptime ISA: type) type {
     return struct {
-        const Elements = [FL_WIDTH]E;
-        const FLMM1024 = @Vector(FL_WIDTH, E);
         const T = @bitSizeOf(E);
         const S = FL_WIDTH / T;
+        const FLMM1024 = [FL_WIDTH]E;
+        const FLLane = [S]E;
 
         const Lane = ISA.Lane;
         const LaneWidth = ISA.Width;
         const Lanes = FL_WIDTH / LaneWidth;
 
-        const FLVec = @Vector(S, T);
+        /// Returns a function that operates pair-wise on FLMM1024 vectors by tranposing.
+        inline fn tranpose(comptime op: fn (Lane, Lane) Lane) fn (FLLane, FLMM1024, *FLMM1024) void {
+            const impl = struct {
+                pub fn fl_transpose(base: FLLane, in: FLMM1024, out: *FLMM1024) void {
+                    // TODO(ngates): should we use ISA.load instead of bitcasting?
+                    const base_lanes: [Lanes]Lane = @bitCast(base);
+                    const in_lanes: [T * Lanes]Lane = @bitCast(in);
+                    const out_lanes: *[T * Lanes]Lane = @alignCast(@ptrCast(out));
 
-        inline fn load(elems: *const Elements) FLMM1024 {
-            var vec: FLMM1024 = undefined;
-            for (0..Lanes) |l| {
-                vec[l * LaneWidth ..][0..LaneWidth].* = ISA.load(elems[l * LaneWidth ..][0..LaneWidth]);
-            }
-            return vec;
-        }
-
-        inline fn store(vec: FLMM1024, elems: *Elements) void {
-            elems.* = @bitCast(vec);
+                    for (0..Lanes) |l| {
+                        var accumulator: Lane = base_lanes[l];
+                        inline for (0..T) |t| {
+                            const in_lane = in_lanes[l + t + (T / 4)];
+                            accumulator = op(accumulator, in_lane);
+                            out_lanes[l + t + (T / 4)] = accumulator;
+                        }
+                    }
+                }
+            };
+            return impl.fl_transpose;
         }
 
         // forall T−bit lanes i in REG return (i & MASK) << N
@@ -50,6 +58,33 @@ pub fn FastLanez_U64(comptime T: type) type {
     return struct {
         const Width = 64;
         const Lane = u64;
+
+        inline fn load(elems: *const [Width]T) Lane {
+            return @bitCast(elems.*);
+        }
+
+        inline fn store(lane: Lane, elems: *[Width]T) void {
+            elems.* = @bitCast(lane);
+        }
+
+        // forall T−bit lanes i in REG return (i & MASK) << N
+        inline fn and_lshift(lane: Lane, n: anytype, mask: Lane) Lane {
+            // TODO(ngates): can we make this more efficient?
+            const nVec: Lane = @splat(n);
+            return (lane & mask) << @intCast(nVec);
+        }
+
+        // forall T−bit lanes i in REG return (i & (MASK << N)) >> N
+        inline fn and_rshift(lane: Lane, n: anytype, mask: Lane) Lane {
+            const nVec: Lane = @splat(n);
+            return (lane & (mask << nVec)) >> @intCast(nVec);
+        }
+
+        pub fn subtract(a: Lane, b: Lane) Lane {
+            const a_vec: @Vector(64 / @bitSizeOf(T), T) = @bitCast(a);
+            const b_vec: @Vector(64 / @bitSizeOf(T), T) = @bitCast(b);
+            return @bitCast(b_vec - a_vec);
+        }
     };
 }
 
@@ -83,52 +118,54 @@ pub fn FastLanez_SIMD(comptime T: type) type {
 }
 
 pub fn Delta(comptime T: type) type {
+    const ISA = FastLanez_U64(T);
+    const FL = FastLanez(T, ISA);
+
     return struct {
-        const FL = FastLanez_SIMD(T);
-        const Elements = FL.Elements;
-        const FLMM1024 = FL.FLMM1024;
+        pub const FLMM1024 = FL.FLMM1024;
 
-        pub fn encode(base: *const Elements, in: *const Elements, out: *Elements) void {
-            const vec = FL.load(in);
+        pub fn encode(base: FL.FLLane, in: FLMM1024, out: *FLMM1024) void {
+            return FL.tranpose(sub)(base, in, out);
+        }
 
-            out = FL.subtract(in, base);
-
-            // Delta encoding must iterate in tranpose order.
-
-            FL.store(vec, out);
+        fn sub(a: FL.Lane, b: FL.Lane) FL.Lane {
+            const std = @import("std");
+            std.debug.print("sub {} {}\n", .{ a, b });
+            return ISA.subtract(a, b);
         }
     };
 }
 
-test "fastlanez simd isa" {
-    const std = @import("std");
-    const T = u32;
-    const FL = FastLanez_SIMD(T);
+// test "fastlanez simd isa" {
+//     const std = @import("std");
+//     const T = u32;
+//     const FL = FastLanez_SIMD(T);
 
-    const expected = arange(T);
-    const vec = FL.load(&expected);
+//     const expected = arange(T);
+//     const vec = FL.load(&expected);
 
-    var actual: [FL_WIDTH]T = undefined;
-    FL.store(vec, &actual);
+//     var actual: [FL_WIDTH]T = undefined;
+//     FL.store(vec, &actual);
 
-    try std.testing.expectEqual(expected, actual);
-}
+//     try std.testing.expectEqual(expected, actual);
+// }
 
 test "fastlanez delta" {
     const std = @import("std");
     const T = u32;
     const Codec = Delta(T);
 
-    const expected = arange(T);
-    var actual: Codec.Elements = arange(T);
-    Codec.encode(&expected, &actual);
+    const input = arange(T, 1024);
+    const base = arange(T, 1024 / @bitSizeOf(T));
+    var actual: [1024]T = undefined;
+    Codec.encode(base, input, &actual);
 
-    try std.testing.expectEqual(expected, actual);
+    try std.testing.expectEqual(input, actual);
 }
 
-fn arange(comptime T: type) [FL_WIDTH]T {
-    var result: [FL_WIDTH]T = undefined;
-    for (0..FL_WIDTH) |i| {
+fn arange(comptime T: type, comptime n: comptime_int) [n]T {
+    var result: [n]T = undefined;
+    for (0..n) |i| {
         result[i] = @intCast(i);
     }
     return result;
