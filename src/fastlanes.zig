@@ -2,40 +2,80 @@
 // Elements may be 8, 16, 32, or 64 bits wide. Known as T.
 // 1024 / T is the number of SIMD lanes, known as S.
 
-// TODO(ngates): parametermize with build option.
-const FL_WIDTH = 1024;
-
 pub fn FastLanez(comptime E: type, comptime ISA: type) type {
+    // Generate the shuffle mask using the 04261537 order.
+
     return struct {
         const T = @bitSizeOf(E);
-        const S = FL_WIDTH / T;
-        const FLMM1024 = [FL_WIDTH]E;
+        const S = 1024 / T;
+        const FLMM1024 = [1024]E;
         const FLLane = [S]E;
+        const Vec = @Vector(1024, E);
 
         const Lane = ISA.Lane;
-        const LaneWidth = ISA.Width;
-        const Lanes = FL_WIDTH / LaneWidth;
+        const LaneWidth = ISA.Width / T;
+        const Lanes = 1024 / ISA.Width;
+        const LaneOffset = 128 / LaneWidth;
+
+        const transpose_mask: [1024]i32 = blk: {
+            @setEvalBranchQuota(2048);
+            var mask: [1024]i32 = undefined;
+            var mask_idx = 0;
+            for (0..8) |row| {
+                for (.{ 0, 4, 2, 6, 1, 5, 3, 7 }) |blk| {
+                    for (0..16) |i| {
+                        mask[mask_idx] = (i * 64) + (blk * 8) + row;
+                        mask_idx += 1;
+                    }
+                }
+            }
+            break :blk mask;
+        };
+
+        inline fn load(elems: *const [1024]E) FLMM1024 {
+            return elems.*;
+        }
 
         /// Returns a function that operates pair-wise on FLMM1024 vectors by tranposing.
-        inline fn tranpose(comptime op: fn (Lane, Lane) Lane) fn (FLLane, FLMM1024, *FLMM1024) void {
+        inline fn fold(comptime op: fn (Lane, Lane) Lane) fn (FLLane, FLMM1024, *FLMM1024) void {
             const impl = struct {
-                pub fn fl_transpose(base: FLLane, in: FLMM1024, out: *FLMM1024) void {
+                pub fn fl_fold(base: FLLane, in: FLMM1024, out: *FLMM1024) void {
                     // TODO(ngates): should we use ISA.load instead of bitcasting?
                     const base_lanes: [Lanes]Lane = @bitCast(base);
                     const in_lanes: [T * Lanes]Lane = @bitCast(in);
                     const out_lanes: *[T * Lanes]Lane = @alignCast(@ptrCast(out));
 
+                    const std = @import("std");
+                    std.debug.print("{any}\n", .{in_lanes});
+
                     for (0..Lanes) |l| {
+                        out_lanes[l] = base_lanes[l];
                         var accumulator: Lane = base_lanes[l];
+
+                        inline for (0..T/8) |t| {
+                            inline for (0..8) |s| {
+                                const
+                            }
+                        }
+
                         inline for (0..T) |t| {
-                            const in_lane = in_lanes[l + t + (T / 4)];
+                            const pos = l + (t * LaneOffset);
+                            std.debug.print("POS: {} {} {} {}", .{ pos, LaneOffset, t, Lanes });
+                            const in_lane = in_lanes[pos];
+                            std.debug.print("next: {}\n", .{in_lane});
+
                             accumulator = op(accumulator, in_lane);
-                            out_lanes[l + t + (T / 4)] = accumulator;
+                            out_lanes[pos] = accumulator;
                         }
                     }
                 }
             };
-            return impl.fl_transpose;
+            return impl.fl_fold;
+        }
+
+        /// Shuffle the input vector into the unified transpose order.
+        pub fn transpose(vec: FLMM1024) FLMM1024 {
+            return @shuffle(E, @as(Vec, vec), @as(Vec, vec), transpose_mask);
         }
 
         // forall T−bit lanes i in REG return (i & MASK) << N
@@ -83,25 +123,29 @@ pub fn FastLanez_U64(comptime T: type) type {
         pub fn subtract(a: Lane, b: Lane) Lane {
             const a_vec: @Vector(64 / @bitSizeOf(T), T) = @bitCast(a);
             const b_vec: @Vector(64 / @bitSizeOf(T), T) = @bitCast(b);
-            const std = @import("std");
-            std.debug.print("{} - {}\n", .{ a_vec, b_vec });
             return @bitCast(a_vec - b_vec);
         }
     };
 }
 
 /// A FastLanez ISA implemented using Zig SIMD 1024-bit vectors.
-pub fn FastLanez_SIMD(comptime T: type) type {
+pub fn FastLanez_SIMD(comptime T: type, comptime W: comptime_int) type {
     return struct {
-        const Width = 1024;
-        const Lane = @Vector(FL_WIDTH / @bitSizeOf(T), T);
+        const Width = W;
+        const LaneWidth = W / @bitSizeOf(T);
+        const Lane = @Vector(LaneWidth, T);
 
-        inline fn load(elems: *const [Width]T) Lane {
+        inline fn load(elems: *const [LaneWidth]T) Lane {
             return @bitCast(elems.*);
         }
 
-        inline fn store(lane: Lane, elems: *[Width]T) void {
+        inline fn store(lane: Lane, elems: *[LaneWidth]T) void {
             elems.* = @bitCast(lane);
+        }
+
+        inline fn shuffle(lane: Lane, mask: [LaneWidth]i32) Lane {
+            const mask_vec: @Vector(LaneWidth, i32) = @bitCast(mask);
+            return @shuffle(T, lane, lane, mask_vec);
         }
 
         // forall T−bit lanes i in REG return (i & MASK) << N
@@ -116,24 +160,27 @@ pub fn FastLanez_SIMD(comptime T: type) type {
             const nVec: Lane = @splat(n);
             return (lane & (mask << nVec)) >> @intCast(nVec);
         }
+
+        inline fn subtract(a: Lane, b: Lane) Lane {
+            return a - b;
+        }
     };
 }
 
 pub fn Delta(comptime T: type) type {
-    const ISA = FastLanez_U64(T);
+    const ISA = FastLanez_SIMD(T, 64);
     const FL = FastLanez(T, ISA);
 
     return struct {
         pub const FLMM1024 = FL.FLMM1024;
 
         pub fn encode(base: FL.FLLane, in: FLMM1024, out: *FLMM1024) void {
-            return FL.tranpose(sub)(base, in, out);
+            const tin = FL.transpose(in);
+            return FL.fold(delta)(base, tin, out);
         }
 
-        fn sub(a: FL.Lane, b: FL.Lane) FL.Lane {
-            const std = @import("std");
-            std.debug.print("sub {} {}\n", .{ a, b });
-            return ISA.subtract(a, b);
+        fn delta(acc: FL.Lane, value: FL.Lane) FL.Lane {
+            return ISA.subtract(value, acc);
         }
     };
 }
@@ -152,13 +199,31 @@ pub fn Delta(comptime T: type) type {
 //     try std.testing.expectEqual(expected, actual);
 // }
 
+test "fastlanez transpose" {
+    const std = @import("std");
+    const T = u32;
+    const ISA = FastLanez_SIMD(T, 64);
+    const FL = FastLanez(T, ISA);
+
+    const input: FL.FLMM1024 = arange(T, 1024);
+    const transposed = FL.transpose(input);
+
+    try std.testing.expectEqual(transposed[0], 0);
+    try std.testing.expectEqual(transposed[1], 64);
+    try std.testing.expectEqual(transposed[2], 128);
+    try std.testing.expectEqual(transposed[16], 32);
+    try std.testing.expectEqual(transposed[1017], 639);
+    try std.testing.expectEqual(transposed[1023], 1023);
+}
+
 test "fastlanez delta" {
     const std = @import("std");
     const T = u32;
     const Codec = Delta(T);
 
     const input = arange(T, 1024);
-    const base = arange(T, 1024 / @bitSizeOf(T));
+    var base: [1024 / @bitSizeOf(T)]T = undefined;
+    @memset(&base, 0);
     var actual: [1024]T = undefined;
     Codec.encode(base, input, &actual);
 
