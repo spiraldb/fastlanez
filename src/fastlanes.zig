@@ -40,20 +40,19 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
         const Vec = @Vector(1024, E);
 
         const Lane = ISA.Lane;
-        const LaneWidth = ISA.Width / T;
-        const Lanes = 1024 / ISA.Width;
-        const LaneOffset = 128 / LaneWidth;
+        const LaneSize = ISA.Width / T;
+        const LaneCount = 1024 / ISA.Width;
 
         /// Wraps a native SIMD operator to and invokes it pairwise over a fastlanes vector.
-        fn pairwise(comptime op: fn (Lane, Lane) Lane) fn (FLBase, FLMM1024, *FLMM1024) void {
+        pub fn pairwise(comptime op: fn (Lane, Lane) Lane) fn (FLBase, FLMM1024, *FLMM1024) void {
             const impl = struct {
                 pub fn fl_pairwise(base: FLBase, in: FLMM1024, out: *FLMM1024) void {
                     @setEvalBranchQuota(8192);
 
                     // TODO(ngates): should we use ISA.load instead of bitcasting?
-                    const base_lanes: [16 / LaneWidth]Lane = @bitCast(base);
-                    const in_lanes: [T * Lanes]Lane = @bitCast(in);
-                    const out_lanes: *[T * Lanes]Lane = @alignCast(@ptrCast(out));
+                    const base_lanes: [16 / LaneSize]Lane = @bitCast(base);
+                    const in_lanes: [T * LaneCount]Lane = @bitCast(in);
+                    const out_lanes: *[T * LaneCount]Lane = @alignCast(@ptrCast(out));
 
                     // See Figure 6 in the FastLanes paper for more information about the next few lines.
                     // The unified tranposed layout places 1024 elements into eight 8x16 tiles.
@@ -82,6 +81,7 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
                                 const offset = lane_offset + order_offset + row_offset;
 
                                 // Apply a function to the previous and current lanes.
+                                // TODO(ngates): ideally we apply an op from the ISA?
                                 const result = op(prev_lane, in_lanes[offset]);
                                 out_lanes[offset] = result;
                                 prev_lane = in_lanes[offset];
