@@ -35,6 +35,7 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
         const S = 1024 / T;
         const FLMM1024 = [1024]E;
         const FLLane = [S]E;
+        const FLBase = [16]E;
         const Vec = @Vector(1024, E);
 
         const Lane = ISA.Lane;
@@ -43,13 +44,13 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
         const LaneOffset = 128 / LaneWidth;
 
         /// Returns a function that operates pair-wise on FLMM1024 vectors by tranposing.
-        inline fn fold(comptime op: fn (Lane, Lane) Lane) fn (FLLane, FLMM1024, *FLMM1024) void {
+        inline fn fold(comptime op: fn (Lane, Lane) Lane) fn (FLBase, FLMM1024, *FLMM1024) void {
             const impl = struct {
-                pub fn fl_fold(base: FLLane, in: FLMM1024, out: *FLMM1024) void {
+                pub fn fl_fold(base: FLBase, in: FLMM1024, out: *FLMM1024) void {
                     @setEvalBranchQuota(8192);
 
                     // TODO(ngates): should we use ISA.load instead of bitcasting?
-                    const base_lanes: [Lanes]Lane = @bitCast(base);
+                    const base_lanes: [16 / LaneWidth]Lane = @bitCast(base);
                     const in_lanes: [T * Lanes]Lane = @bitCast(in);
                     const out_lanes: *[T * Lanes]Lane = @alignCast(@ptrCast(out));
                     const std = @import("std");
@@ -62,31 +63,27 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
                     // const tile_height_in_elems = 8;
                     const tile_width_in_elems = 16;
                     const tile_width_in_lanes = tile_width_in_elems / ISA.LaneWidth;
-                    std.debug.print("Tile width {} elems, {} lanes\n", .{ tile_width_in_elems, tile_width_in_lanes });
 
                     const row_width_in_elems = 8 * tile_width_in_elems;
                     const row_width_in_lanes = row_width_in_elems / ISA.LaneWidth;
-                    std.debug.print("Row width {} lanes\n", .{row_width_in_lanes});
 
                     // The ordering places 1024 elements into 8x16 tiles.
                     // Each ISA lane covers some number of elements based on its implementation, the LaneWidth.
                     // Our job is to iterate over the tranposed ordering in a way that applies SIMD operations
                     // over adjacent elements in the original ordering.
 
-                    const tile_size = 1024 / T;
-
                     // First, loop over however many lanes fit across each tile width.
-                    inline for (0..tile_size) |lane_offset| {
+                    inline for (0..tile_width_in_lanes) |l| {
                         // Each lane shifts everything along by 1
-                        std.debug.print("L {}/{}\n", .{ lane_offset, base_lanes.len });
-                        var base_lane: Lane = base_lanes[lane_offset];
+                        const lane_offset = l;
+                        var base_lane: Lane = base_lanes[l];
 
                         // Next, iterate over the 8 tranposed tiles according to the ordering.
                         inline for (ORDER) |o| {
                             const order_offset = o * tile_width_in_lanes;
 
                             // Finally, we iterate over the rows of the tile.
-                            inline for (0..8 / tile_size) |row| {
+                            inline for (0..8) |row| {
                                 const row_offset = row * row_width_in_lanes;
 
                                 const offset = lane_offset + order_offset + row_offset;
@@ -209,7 +206,7 @@ pub fn Delta(comptime T: type) type {
         pub const FL = FastLanez(T, ISA);
         pub const FLMM1024 = FL.FLMM1024;
 
-        pub fn encode(base: FL.FLLane, in: FLMM1024, out: *FLMM1024) void {
+        pub fn encode(base: FL.FLBase, in: FLMM1024, out: *FLMM1024) void {
             const tin = FL.transpose(in);
             return FL.fold(delta)(base, tin, out);
         }
@@ -256,31 +253,22 @@ test "fastlanez delta" {
     const T = u32;
     const Codec = Delta(T);
 
-    // const base = [_]T{0} ** (1024 / @bitSizeOf(T));
-    const base = arange(T, 1024 / @bitSizeOf(T));
+    const base = [_]T{0} ** 16;
     const input = arange(T, 1024);
-
-    std.debug.print("BASE {}\n", .{base.len});
 
     var actual: [1024]T = undefined;
     Codec.encode(base, input, &actual);
 
     actual = Codec.FL.untranspose(actual);
-    std.debug.print("{any}", .{actual});
 
     for (0..1024) |i| {
-        // Since we start with a base lane of all 0s, we expect an initial delta to appear
-        // at the start of each fastlane.
-        if (i % (1024 / @bitSizeOf(T)) == 0) {
+        // Since fastlanes processes based on 16 blocks, we expect a zero delta every 1024 / 16 = 64 elements.
+        if (i % 64 == 0) {
             try std.testing.expectEqual(i, actual[i]);
         } else {
             try std.testing.expectEqual(1, actual[i]);
         }
     }
-
-    const expected = [_]T{1} ** 1024;
-
-    try std.testing.expectEqual(expected, actual);
 }
 
 fn arange(comptime T: type, comptime n: comptime_int) [n]T {
