@@ -3,10 +3,10 @@
 // 1024 / T is the number of SIMD lanes, known as S.
 
 pub fn FastLanez(comptime E: type, comptime ISA: type) type {
-
-    // Generate the shuffle mask using the 04261537 order.
+    // This magic ordering allows us to operate efficiently using a variety of SIMD lane widths.
     const ORDER = .{ 0, 4, 2, 6, 1, 5, 3, 7 };
 
+    // Comptime compute the transpose and untranspose masks.
     const transpose_mask: [1024]i32 = blk: {
         @setEvalBranchQuota(4096);
         var mask: [1024]i32 = undefined;
@@ -44,8 +44,8 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
         const Lanes = 1024 / ISA.Width;
         const LaneOffset = 128 / LaneWidth;
 
-        /// Returns a function that operates pairwise on FLMM1024 vectors by tranposing.
-        inline fn pairwise(comptime op: fn (Lane, Lane) Lane) fn (FLBase, FLMM1024, *FLMM1024) void {
+        /// Wraps a native SIMD operator to and invokes it pairwise over a fastlanes vector.
+        fn pairwise(comptime op: fn (Lane, Lane) Lane) fn (FLBase, FLMM1024, *FLMM1024) void {
             const impl = struct {
                 pub fn fl_pairwise(base: FLBase, in: FLMM1024, out: *FLMM1024) void {
                     @setEvalBranchQuota(8192);
@@ -55,37 +55,36 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
                     const in_lanes: [T * Lanes]Lane = @bitCast(in);
                     const out_lanes: *[T * Lanes]Lane = @alignCast(@ptrCast(out));
 
-                    // const tile_height_in_elems = 8;
+                    // See Figure 6 in the FastLanes paper for more information about the next few lines.
+                    // The unified tranposed layout places 1024 elements into eight 8x16 tiles.
+                    // These tiles are ordered as per the ORDER constant above, 04261537.
+                    //
+                    // There are three loops that are unrolled at compile-time.
+                    // First, the loop over the SIMD lanes themselves. Think of this as an offset over the columns of each tile.
+                    // Next, we loop over the 8 tiles themselves. This is the tranposed ordering.
+                    // Finally, we loop over the rows of each tile.
+
                     const tile_width_in_elems = 16;
                     const tile_width_in_lanes = tile_width_in_elems / ISA.LaneWidth;
 
                     const row_width_in_elems = 8 * tile_width_in_elems;
                     const row_width_in_lanes = row_width_in_elems / ISA.LaneWidth;
 
-                    // The ordering places 1024 elements into 8x16 tiles.
-                    // Each ISA lane covers some number of elements based on its implementation, the LaneWidth.
-                    // Our job is to iterate over the tranposed ordering in a way that applies SIMD operations
-                    // over adjacent elements in the original ordering.
+                    inline for (0..tile_width_in_lanes) |lane_offset| {
+                        var prev_lane: Lane = base_lanes[lane_offset];
 
-                    // First, loop over however many lanes fit across each tile width.
-                    for (0..tile_width_in_lanes) |l| {
-                        // Each lane shifts everything along by 1
-                        const lane_offset = l;
-                        var base_lane: Lane = base_lanes[l];
-
-                        // Next, iterate over the 8 tranposed tiles according to the ordering.
                         inline for (ORDER) |o| {
                             const order_offset = o * tile_width_in_lanes;
 
-                            // Finally, we iterate over the rows of the tile.
                             inline for (0..8) |row| {
                                 const row_offset = row * row_width_in_lanes;
 
                                 const offset = lane_offset + order_offset + row_offset;
 
-                                const result = op(base_lane, in_lanes[offset]);
+                                // Apply a function to the previous and current lanes.
+                                const result = op(prev_lane, in_lanes[offset]);
                                 out_lanes[offset] = result;
-                                base_lane = in_lanes[offset];
+                                prev_lane = in_lanes[offset];
                             }
                         }
                     }
