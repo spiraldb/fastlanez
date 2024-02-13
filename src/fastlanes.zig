@@ -3,7 +3,32 @@
 // 1024 / T is the number of SIMD lanes, known as S.
 
 pub fn FastLanez(comptime E: type, comptime ISA: type) type {
+    @setEvalBranchQuota(4096);
+
     // Generate the shuffle mask using the 04261537 order.
+    const ORDER = .{ 0, 4, 2, 6, 1, 5, 3, 7 };
+
+    const transpose_mask: [1024]i32 = blk: {
+        var mask: [1024]i32 = undefined;
+        var mask_idx = 0;
+        for (0..8) |row| {
+            for (ORDER) |o| {
+                for (0..16) |i| {
+                    mask[mask_idx] = (i * 64) + (o * 8) + row;
+                    mask_idx += 1;
+                }
+            }
+        }
+        break :blk mask;
+    };
+
+    const untranspose_mask: [1024]i32 = blk: {
+        var mask: [1024]i32 = undefined;
+        for (0..1024) |i| {
+            mask[transpose_mask[i]] = i;
+        }
+        break :blk mask;
+    };
 
     return struct {
         const T = @bitSizeOf(E);
@@ -17,25 +42,6 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
         const Lanes = 1024 / ISA.Width;
         const LaneOffset = 128 / LaneWidth;
 
-        const transpose_mask: [1024]i32 = blk: {
-            @setEvalBranchQuota(2048);
-            var mask: [1024]i32 = undefined;
-            var mask_idx = 0;
-            for (0..8) |row| {
-                for (.{ 0, 4, 2, 6, 1, 5, 3, 7 }) |blk| {
-                    for (0..16) |i| {
-                        mask[mask_idx] = (i * 64) + (blk * 8) + row;
-                        mask_idx += 1;
-                    }
-                }
-            }
-            break :blk mask;
-        };
-
-        inline fn load(elems: *const [1024]E) FLMM1024 {
-            return elems.*;
-        }
-
         /// Returns a function that operates pair-wise on FLMM1024 vectors by tranposing.
         inline fn fold(comptime op: fn (Lane, Lane) Lane) fn (FLLane, FLMM1024, *FLMM1024) void {
             const impl = struct {
@@ -46,36 +52,62 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
                     const out_lanes: *[T * Lanes]Lane = @alignCast(@ptrCast(out));
 
                     const std = @import("std");
-                    std.debug.print("{any}\n", .{in_lanes});
+                    // for (in_lanes, 0..) |lane, i| {
+                    //     std.debug.print("{} {any}\n", .{ i, lane });
+                    // }
+                    std.debug.print("T: {}, Lanes: {}, LaneWidth: {}, LaneOffset: {}, ISA.Width: {}\n", .{ T, Lanes, LaneWidth, LaneOffset, ISA.Width });
 
-                    for (0..Lanes) |l| {
-                        out_lanes[l] = base_lanes[l];
-                        var accumulator: Lane = base_lanes[l];
+                    // const tile_height_in_elems = 8;
+                    const tile_width_in_elems = 16;
+                    const tile_width_in_lanes = tile_width_in_elems / ISA.LaneWidth;
+                    std.debug.print("Tile width {} elems, {} lanes\n", .{ tile_width_in_elems, tile_width_in_lanes });
 
-                        inline for (0..T/8) |t| {
-                            inline for (0..8) |s| {
-                                const
+                    const row_width_in_elems = 8 * tile_width_in_elems;
+                    const row_width_in_lanes = row_width_in_elems / ISA.LaneWidth;
+                    std.debug.print("Row width {} lanes\n", .{row_width_in_lanes});
+
+                    // The ordering places 1024 elements into 8x16 tiles.
+                    // Each ISA lane covers some number of elements based on its implementation, the LaneWidth.
+                    // Our job is to iterate over the tranposed ordering in a way that applies SIMD operations
+                    // over adjacent elements in the original ordering.
+
+                    // First, loop over however many lanes fit across each tile width.
+                    inline for (0..tile_width_in_lanes) |l| {
+                        var base_lane: Lane = base_lanes[l];
+
+                        // Each lane shifts everything along by 1
+                        const lane_offset = l;
+
+                        // Next, iterate over the 8 tranposed tiles according to the ordering.
+                        inline for (ORDER) |o| {
+                            const order_offset = o * tile_width_in_lanes;
+
+                            // Finally, we iterate over the rows of the tile.
+                            inline for (0..8) |row| {
+                                const row_offset = row * row_width_in_lanes;
+
+                                const offset = lane_offset + order_offset + row_offset;
+                                const result = op(base_lane, in_lanes[offset]);
+                                std.debug.print("Result {}\n", .{result});
+                                out_lanes[offset] = result;
+                                base_lane = in_lanes[offset];
                             }
-                        }
-
-                        inline for (0..T) |t| {
-                            const pos = l + (t * LaneOffset);
-                            std.debug.print("POS: {} {} {} {}", .{ pos, LaneOffset, t, Lanes });
-                            const in_lane = in_lanes[pos];
-                            std.debug.print("next: {}\n", .{in_lane});
-
-                            accumulator = op(accumulator, in_lane);
-                            out_lanes[pos] = accumulator;
                         }
                     }
                 }
             };
+
             return impl.fl_fold;
         }
 
         /// Shuffle the input vector into the unified transpose order.
         pub fn transpose(vec: FLMM1024) FLMM1024 {
             return @shuffle(E, @as(Vec, vec), @as(Vec, vec), transpose_mask);
+        }
+
+        /// Unshuffle the input vector from the unified transpose order.
+        pub fn untranspose(vec: FLMM1024) FLMM1024 {
+            return @shuffle(E, @as(Vec, vec), @as(Vec, vec), untranspose_mask);
         }
 
         // forall T−bit lanes i in REG return (i & MASK) << N
@@ -169,9 +201,9 @@ pub fn FastLanez_SIMD(comptime T: type, comptime W: comptime_int) type {
 
 pub fn Delta(comptime T: type) type {
     const ISA = FastLanez_SIMD(T, 64);
-    const FL = FastLanez(T, ISA);
 
     return struct {
+        pub const FL = FastLanez(T, ISA);
         pub const FLMM1024 = FL.FLMM1024;
 
         pub fn encode(base: FL.FLLane, in: FLMM1024, out: *FLMM1024) void {
@@ -218,16 +250,21 @@ test "fastlanez transpose" {
 
 test "fastlanez delta" {
     const std = @import("std");
-    const T = u32;
+    const T = u16;
     const Codec = Delta(T);
 
+    const base = [_]T{0} ** (1024 / @bitSizeOf(T));
     const input = arange(T, 1024);
-    var base: [1024 / @bitSizeOf(T)]T = undefined;
-    @memset(&base, 0);
+
     var actual: [1024]T = undefined;
     Codec.encode(base, input, &actual);
 
-    try std.testing.expectEqual(input, actual);
+    actual = Codec.FL.untranspose(actual);
+    std.debug.print("{any}", .{actual});
+
+    const expected = [_]T{1} ** 1024;
+
+    try std.testing.expectEqual(expected, actual);
 }
 
 fn arange(comptime T: type, comptime n: comptime_int) [n]T {
