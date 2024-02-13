@@ -3,12 +3,12 @@
 // 1024 / T is the number of SIMD lanes, known as S.
 
 pub fn FastLanez(comptime E: type, comptime ISA: type) type {
-    @setEvalBranchQuota(4096);
 
     // Generate the shuffle mask using the 04261537 order.
     const ORDER = .{ 0, 4, 2, 6, 1, 5, 3, 7 };
 
     const transpose_mask: [1024]i32 = blk: {
+        @setEvalBranchQuota(4096);
         var mask: [1024]i32 = undefined;
         var mask_idx = 0;
         for (0..8) |row| {
@@ -23,6 +23,7 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
     };
 
     const untranspose_mask: [1024]i32 = blk: {
+        @setEvalBranchQuota(4096);
         var mask: [1024]i32 = undefined;
         for (0..1024) |i| {
             mask[transpose_mask[i]] = i;
@@ -43,22 +44,16 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
         const Lanes = 1024 / ISA.Width;
         const LaneOffset = 128 / LaneWidth;
 
-        /// Returns a function that operates pair-wise on FLMM1024 vectors by tranposing.
-        inline fn fold(comptime op: fn (Lane, Lane) Lane) fn (FLBase, FLMM1024, *FLMM1024) void {
+        /// Returns a function that operates pairwise on FLMM1024 vectors by tranposing.
+        inline fn pairwise(comptime op: fn (Lane, Lane) Lane) fn (FLBase, FLMM1024, *FLMM1024) void {
             const impl = struct {
-                pub fn fl_fold(base: FLBase, in: FLMM1024, out: *FLMM1024) void {
+                pub fn fl_pairwise(base: FLBase, in: FLMM1024, out: *FLMM1024) void {
                     @setEvalBranchQuota(8192);
 
                     // TODO(ngates): should we use ISA.load instead of bitcasting?
                     const base_lanes: [16 / LaneWidth]Lane = @bitCast(base);
                     const in_lanes: [T * Lanes]Lane = @bitCast(in);
                     const out_lanes: *[T * Lanes]Lane = @alignCast(@ptrCast(out));
-                    const std = @import("std");
-
-                    // for (in_lanes, 0..) |lane, i| {
-                    //     std.debug.print("{} {any}\n", .{ i, lane });
-                    // }
-                    std.debug.print("T: {}, Lanes: {}, LaneWidth: {}, LaneOffset: {}, ISA.Width: {}\n", .{ T, Lanes, LaneWidth, LaneOffset, ISA.Width });
 
                     // const tile_height_in_elems = 8;
                     const tile_width_in_elems = 16;
@@ -73,7 +68,7 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
                     // over adjacent elements in the original ordering.
 
                     // First, loop over however many lanes fit across each tile width.
-                    inline for (0..tile_width_in_lanes) |l| {
+                    for (0..tile_width_in_lanes) |l| {
                         // Each lane shifts everything along by 1
                         const lane_offset = l;
                         var base_lane: Lane = base_lanes[l];
@@ -97,7 +92,7 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
                 }
             };
 
-            return impl.fl_fold;
+            return impl.fl_pairwise;
         }
 
         /// Shuffle the input vector into the unified transpose order.
@@ -208,7 +203,7 @@ pub fn Delta(comptime T: type) type {
 
         pub fn encode(base: FL.FLBase, in: FLMM1024, out: *FLMM1024) void {
             const tin = FL.transpose(in);
-            return FL.fold(delta)(base, tin, out);
+            return FL.pairwise(delta)(base, tin, out);
         }
 
         fn delta(acc: FL.Lane, value: FL.Lane) FL.Lane {
