@@ -154,8 +154,8 @@ pub fn FastLanez_U64(comptime T: type) type {
     };
 }
 
-/// A FastLanez ISA implemented using Zig SIMD 1024-bit vectors.
-pub fn FastLanez_SIMD(comptime T: type, comptime W: comptime_int) type {
+/// A FastLanez ISA implemented using Zig SIMD vectors (of configurable width).
+pub fn FastLanez_ZIMD(comptime T: type, comptime W: comptime_int) type {
     return struct {
         const Width = W;
         const LaneWidth = W / @bitSizeOf(T);
@@ -194,7 +194,7 @@ pub fn FastLanez_SIMD(comptime T: type, comptime W: comptime_int) type {
 }
 
 pub fn Delta(comptime T: type) type {
-    const ISA = FastLanez_SIMD(T, 32);
+    const ISA = FastLanez_ZIMD(T, 128);
 
     return struct {
         pub const FL = FastLanez(T, ISA);
@@ -228,7 +228,7 @@ pub fn Delta(comptime T: type) type {
 test "fastlanez transpose" {
     const std = @import("std");
     const T = u32;
-    const ISA = FastLanez_SIMD(T, 64);
+    const ISA = FastLanez_ZIMD(T, 128);
     const FL = FastLanez(T, ISA);
 
     const input: FL.FLMM1024 = arange(T, 1024);
