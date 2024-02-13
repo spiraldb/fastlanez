@@ -46,12 +46,14 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
         inline fn fold(comptime op: fn (Lane, Lane) Lane) fn (FLLane, FLMM1024, *FLMM1024) void {
             const impl = struct {
                 pub fn fl_fold(base: FLLane, in: FLMM1024, out: *FLMM1024) void {
+                    @setEvalBranchQuota(8192);
+
                     // TODO(ngates): should we use ISA.load instead of bitcasting?
                     const base_lanes: [Lanes]Lane = @bitCast(base);
                     const in_lanes: [T * Lanes]Lane = @bitCast(in);
                     const out_lanes: *[T * Lanes]Lane = @alignCast(@ptrCast(out));
-
                     const std = @import("std");
+
                     // for (in_lanes, 0..) |lane, i| {
                     //     std.debug.print("{} {any}\n", .{ i, lane });
                     // }
@@ -71,24 +73,25 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
                     // Our job is to iterate over the tranposed ordering in a way that applies SIMD operations
                     // over adjacent elements in the original ordering.
 
-                    // First, loop over however many lanes fit across each tile width.
-                    inline for (0..tile_width_in_lanes) |l| {
-                        var base_lane: Lane = base_lanes[l];
+                    const tile_size = 1024 / T;
 
+                    // First, loop over however many lanes fit across each tile width.
+                    inline for (0..tile_size) |lane_offset| {
                         // Each lane shifts everything along by 1
-                        const lane_offset = l;
+                        std.debug.print("L {}/{}\n", .{ lane_offset, base_lanes.len });
+                        var base_lane: Lane = base_lanes[lane_offset];
 
                         // Next, iterate over the 8 tranposed tiles according to the ordering.
                         inline for (ORDER) |o| {
                             const order_offset = o * tile_width_in_lanes;
 
                             // Finally, we iterate over the rows of the tile.
-                            inline for (0..8) |row| {
+                            inline for (0..8 / tile_size) |row| {
                                 const row_offset = row * row_width_in_lanes;
 
                                 const offset = lane_offset + order_offset + row_offset;
+
                                 const result = op(base_lane, in_lanes[offset]);
-                                std.debug.print("Result {}\n", .{result});
                                 out_lanes[offset] = result;
                                 base_lane = in_lanes[offset];
                             }
@@ -200,7 +203,7 @@ pub fn FastLanez_SIMD(comptime T: type, comptime W: comptime_int) type {
 }
 
 pub fn Delta(comptime T: type) type {
-    const ISA = FastLanez_SIMD(T, 64);
+    const ISA = FastLanez_SIMD(T, 32);
 
     return struct {
         pub const FL = FastLanez(T, ISA);
@@ -250,17 +253,30 @@ test "fastlanez transpose" {
 
 test "fastlanez delta" {
     const std = @import("std");
-    const T = u16;
+    const T = u32;
     const Codec = Delta(T);
 
-    const base = [_]T{0} ** (1024 / @bitSizeOf(T));
+    // const base = [_]T{0} ** (1024 / @bitSizeOf(T));
+    const base = arange(T, 1024 / @bitSizeOf(T));
     const input = arange(T, 1024);
+
+    std.debug.print("BASE {}\n", .{base.len});
 
     var actual: [1024]T = undefined;
     Codec.encode(base, input, &actual);
 
     actual = Codec.FL.untranspose(actual);
     std.debug.print("{any}", .{actual});
+
+    for (0..1024) |i| {
+        // Since we start with a base lane of all 0s, we expect an initial delta to appear
+        // at the start of each fastlane.
+        if (i % (1024 / @bitSizeOf(T)) == 0) {
+            try std.testing.expectEqual(i, actual[i]);
+        } else {
+            try std.testing.expectEqual(1, actual[i]);
+        }
+    }
 
     const expected = [_]T{1} ** 1024;
 
