@@ -2,8 +2,16 @@
 // Elements may be 8, 16, 32, or 64 bits wide. Known as T.
 // 1024 / T is the number of SIMD lanes, known as S.
 
+// The question is whether strictly implementing the 1024 bit vectors will
+// mean the compiler fails to optimize. e.g. for our u64 ISA, we need to load
+// values into a 16 element array of u64s. Instead of iterating over 1 u64 at a time
+// inside a single register, we may now have another STORE operation to push
+// all this back into memory.
+
 pub fn FastLanez(comptime E: type, comptime ISA: type) type {
-    // This magic ordering allows us to operate efficiently using a variety of SIMD lane widths.
+    const V = @Vector(1024, E);
+
+    // This unified transpose layout allows us to operate efficiently using a variety of SIMD lane widths.
     const ORDER = .{ 0, 4, 2, 6, 1, 5, 3, 7 };
 
     // Comptime compute the transpose and untranspose masks.
@@ -34,19 +42,67 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
     return struct {
         const T = @bitSizeOf(E);
         const S = 1024 / T;
-        const FLMM1024 = [1024]E;
-        const FLLane = [S]E;
-        const FLBase = [16]E;
-        const Vec = @Vector(1024, E);
+
+        /// A FL vector captures 1024 elements of type E.
+        const FLVector = [1024]E;
+        const FLBase = [S]E;
+
+        /// Represents the fastlanes virtual 1024-bit SIMD register.
+        pub const FLMM1024 = ISA.FLMM1024;
 
         const Lane = ISA.Lane;
         const LaneSize = ISA.Width / T;
         const LaneCount = 1024 / ISA.Width;
 
-        /// Wraps a native SIMD operator to and invokes it pairwise over a fastlanes vector.
-        pub fn pairwise(comptime op: fn (Lane, Lane) Lane) fn (FLBase, FLMM1024, *FLMM1024) void {
+        /// Wraps a native SIMD operator and invokes it elementwise over a fastlanes vector.
+        /// TODO(ngates): does the order matter at all here?
+        pub fn elementwise(comptime op: fn (Lane) Lane) fn (FLVector, *FLVector) void {
             const impl = struct {
-                pub fn fl_pairwise(base: FLBase, in: FLMM1024, out: *FLMM1024) void {
+                pub fn fl_elementwise(in: FLVector, out: *FLVector) void {
+                    @setEvalBranchQuota(8192);
+
+                    const in_lanes: [T * LaneCount]Lane = @bitCast(in);
+                    const out_lanes: *[T * LaneCount]Lane = @alignCast(@ptrCast(out));
+
+                    inline for (0..LaneCount) |i| {
+                        const result = op(in_lanes[i]);
+                        out_lanes[i] = result;
+                    }
+                }
+            };
+
+            return impl.fl_elementwise;
+        }
+
+        pub fn pairwise2(comptime op: fn (ISA.FLMM1024, ISA.FLMM1024) ISA.FLMM1024) fn (FLBase, FLVector, *FLVector) void {
+            const impl = struct {
+                const std = @import("std");
+
+                pub fn fl_pairwise2(base: FLBase, in: FLVector, out: *FLVector) void {
+                    @setEvalBranchQuota(8192);
+
+                    var prev = ISA.load(base);
+                    inline for (0..64 / T) |o| {
+                        const order_offset = ORDER[o] * 16;
+                        inline for (0..8) |row| {
+                            const row_offset = row * S;
+                            const next = ISA.load(in[order_offset + row_offset ..][0..S]);
+                            const result = op(prev, next);
+                            ISA.store(result, out[order_offset + row_offset ..][0..S]);
+                            prev = next;
+                        }
+                    }
+                }
+            };
+
+            return impl.fl_pairwise2;
+        }
+
+        /// Wraps a native SIMD operator and invokes it pairwise over a fastlanes vector.
+        /// TODO(ngates): this could just be a comptime function to generate a lane indices iterator?
+        pub fn pairwise(comptime op: fn (Lane, Lane) Lane) fn (FLBase, FLVector, *FLVector) void {
+            const impl = struct {
+                pub fn fl_pairwise(base: FLBase, in: FLVector, out: *FLVector) void {
                     @setEvalBranchQuota(8192);
 
                     // TODO(ngates): should we use ISA.load instead of bitcasting?
@@ -69,6 +125,8 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
                     const row_width_in_elems = 8 * tile_width_in_elems;
                     const row_width_in_lanes = row_width_in_elems / ISA.LaneWidth;
 
+                    // TODO(ngates): can we loop of FLMM1024 bit vectors instead of native lanes?
+                    // That way the code here doesn't depend on bit width and we can push it inside the ISA impls.
                     inline for (0..tile_width_in_lanes) |lane_offset| {
                         var prev_lane: Lane = base_lanes[lane_offset];
 
@@ -95,25 +153,26 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
         }
 
         /// Shuffle the input vector into the unified transpose order.
-        pub fn transpose(vec: FLMM1024) FLMM1024 {
-            return @shuffle(E, @as(Vec, vec), @as(Vec, vec), transpose_mask);
+        /// TODO(ngates): not sure there's much better than a scalar loop here.
+        pub fn transpose(vec: FLVector) FLVector {
+            return @shuffle(E, @as(V, vec), @as(V, vec), transpose_mask);
         }
 
         /// Unshuffle the input vector from the unified transpose order.
-        pub fn untranspose(vec: FLMM1024) FLMM1024 {
-            return @shuffle(E, @as(Vec, vec), @as(Vec, vec), untranspose_mask);
+        pub fn untranspose(vec: FLVector) FLVector {
+            return @shuffle(E, @as(V, vec), @as(V, vec), untranspose_mask);
         }
 
         // forall T−bit lanes i in REG return (i & MASK) << N
-        inline fn and_lshift(vec: FLMM1024, n: anytype, mask: FLMM1024) FLMM1024 {
+        inline fn and_lshift(vec: FLVector, n: anytype, mask: FLVector) FLVector {
             // TODO(ngates): can we make this more efficient?
-            const nVec: FLMM1024 = @splat(n);
+            const nVec: FLVector = @splat(n);
             return (vec & mask) << @intCast(nVec);
         }
 
         // forall T−bit lanes i in REG return (i & (MASK << N)) >> N
-        inline fn and_rshift(vec: FLMM1024, n: anytype, mask: FLMM1024) FLMM1024 {
-            const nVec: FLMM1024 = @splat(n);
+        inline fn and_rshift(vec: FLVector, n: anytype, mask: FLVector) FLVector {
+            const nVec: FLVector = @splat(n);
             return (vec & (mask << nVec)) >> @intCast(nVec);
         }
     };
@@ -146,10 +205,37 @@ pub fn FastLanez_U64(comptime T: type) type {
             return (lane & (mask << nVec)) >> @intCast(nVec);
         }
 
-        pub fn subtract(a: Lane, b: Lane) Lane {
+        inline fn subtract(a: Lane, b: Lane) Lane {
             const a_vec: @Vector(64 / @bitSizeOf(T), T) = @bitCast(a);
             const b_vec: @Vector(64 / @bitSizeOf(T), T) = @bitCast(b);
             return @bitCast(a_vec - b_vec);
+        }
+    };
+}
+
+pub fn FastLanez_ZIMD2(comptime E: type, comptime W: comptime_int) type {
+    const nvecs = 1024 / W;
+    const nelems = 1024 / @bitSizeOf(E);
+
+    return struct {
+        // Our FLMM1024 type.
+
+        pub const FLMM1024 = [nvecs]@Vector(W / @bitSizeOf(E), E);
+
+        inline fn load(elems: *const [nelems]E) FLMM1024 {
+            return @bitCast(elems.*);
+        }
+
+        inline fn store(register: FLMM1024, elems: *[nelems]E) void {
+            elems.* = @bitCast(register);
+        }
+
+        inline fn subtract(a: FLMM1024, b: FLMM1024) FLMM1024 {
+            var result: FLMM1024 = undefined;
+            inline for (0..nvecs) |i| {
+                result[i] = a[i] - b[i];
+            }
+            return result;
         }
     };
 }
@@ -194,15 +280,21 @@ pub fn FastLanez_ZIMD(comptime T: type, comptime W: comptime_int) type {
 }
 
 pub fn Delta(comptime T: type) type {
-    const ISA = FastLanez_ZIMD(T, 128);
+    const ISA = FastLanez_ZIMD2(T, 128);
 
     return struct {
         pub const FL = FastLanez(T, ISA);
-        pub const FLMM1024 = FL.FLMM1024;
+        pub const FLVector = FL.FLVector;
 
-        pub fn encode(base: FL.FLBase, in: FLMM1024, out: *FLMM1024) void {
+        pub fn encode(base: FL.FLBase, in: FLVector, out: *FLVector) void {
             const tin = FL.transpose(in);
-            return FL.pairwise(delta)(base, tin, out);
+
+            return FL.pairwise2(delta2)(base, tin, out);
+            // return FL.pairwise(delta)(base, tin, out);
+        }
+
+        fn delta2(acc: FL.FLMM1024, value: FL.FLMM1024) FL.FLMM1024 {
+            return ISA.subtract(value, acc);
         }
 
         fn delta(acc: FL.Lane, value: FL.Lane) FL.Lane {
@@ -231,7 +323,7 @@ test "fastlanez transpose" {
     const ISA = FastLanez_ZIMD(T, 128);
     const FL = FastLanez(T, ISA);
 
-    const input: FL.FLMM1024 = arange(T, 1024);
+    const input: FL.FLVector = arange(T, 1024);
     const transposed = FL.transpose(input);
 
     try std.testing.expectEqual(transposed[0], 0);
@@ -247,7 +339,7 @@ test "fastlanez delta" {
     const T = u32;
     const Codec = Delta(T);
 
-    const base = [_]T{0} ** 16;
+    const base = [_]T{0} ** 32;
     const input = arange(T, 1024);
 
     var actual: [1024]T = undefined;
