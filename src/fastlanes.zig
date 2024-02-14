@@ -12,7 +12,7 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
     const V = @Vector(1024, E);
 
     // This unified transpose layout allows us to operate efficiently using a variety of SIMD lane widths.
-    const ORDER = .{ 0, 4, 2, 6, 1, 5, 3, 7 };
+    const ORDER: [8]u8 = .{ 0, 4, 2, 6, 1, 5, 3, 7 };
 
     // Comptime compute the transpose and untranspose masks.
     const transpose_mask: [1024]i32 = blk: {
@@ -74,6 +74,7 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
             return impl.fl_elementwise;
         }
 
+        /// Pairwise but looping over 1024 bit vectors.
         pub fn pairwise2(comptime op: fn (ISA.FLMM1024, ISA.FLMM1024) ISA.FLMM1024) fn (FLBase, FLVector, *FLVector) void {
             const impl = struct {
                 const std = @import("std");
@@ -81,12 +82,16 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
                 pub fn fl_pairwise2(base: FLBase, in: FLVector, out: *FLVector) void {
                     @setEvalBranchQuota(8192);
 
-                    var prev = ISA.load(base);
-                    inline for (0..64 / T) |o| {
+                    var prev = ISA.load(&base);
+
+                    inline for (0..T / 8) |o| {
                         const order_offset = ORDER[o] * 16;
-                        inline for (0..8) |row| {
-                            const row_offset = row * S;
-                            const next = ISA.load(in[order_offset + row_offset ..][0..S]);
+
+                        inline for (0..8) |row| { // u32: 8
+                            const row_offset = 128 * row;
+
+                            const offset = order_offset + row_offset;
+                            const next = ISA.load(in[offset..][0..S]);
                             const result = op(prev, next);
                             ISA.store(result, out[order_offset + row_offset ..][0..S]);
                             prev = next;
@@ -99,6 +104,7 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
         }
 
         /// Wraps a native SIMD operator and invokes it pairwise over a fastlanes vector.
+        /// TODO(ngates): the base vector is wrong here. It should be 1024 bits, not 16 elements.
         /// TODO(ngates): this could just be a comptime function to generate a lane indices iterator?
         pub fn pairwise(comptime op: fn (Lane, Lane) Lane) fn (FLBase, FLVector, *FLVector) void {
             const impl = struct {
@@ -339,7 +345,7 @@ test "fastlanez delta" {
     const T = u32;
     const Codec = Delta(T);
 
-    const base = [_]T{0} ** 32;
+    const base = [_]T{0} ** (1024 / @bitSizeOf(T));
     const input = arange(T, 1024);
 
     var actual: [1024]T = undefined;
@@ -349,7 +355,7 @@ test "fastlanez delta" {
 
     for (0..1024) |i| {
         // Since fastlanes processes based on 16 blocks, we expect a zero delta every 1024 / 16 = 64 elements.
-        if (i % 64 == 0) {
+        if (i % @bitSizeOf(T) == 0) {
             try std.testing.expectEqual(i, actual[i]);
         } else {
             try std.testing.expectEqual(1, actual[i]);
