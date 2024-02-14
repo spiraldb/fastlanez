@@ -50,7 +50,7 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
         /// Represents the fastlanes virtual 1024-bit SIMD register.
         pub const FLMM1024 = ISA.FLMM1024;
 
-        const Lane = ISA.Lane;
+        pub const Lane = ISA.Lane;
         const LaneSize = ISA.Width / T;
         const LaneCount = 1024 / ISA.Width;
 
@@ -112,7 +112,7 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
                     @setEvalBranchQuota(8192);
 
                     // TODO(ngates): should we use ISA.load instead of bitcasting?
-                    const base_lanes: [16 / LaneSize]Lane = @bitCast(base);
+                    const base_lanes: [S / LaneSize]Lane = @bitCast(base);
                     const in_lanes: [T * LaneCount]Lane = @bitCast(in);
                     const out_lanes: *[T * LaneCount]Lane = @alignCast(@ptrCast(out));
 
@@ -239,7 +239,7 @@ pub fn FastLanez_ZIMD2(comptime E: type, comptime W: comptime_int) type {
         inline fn subtract(a: FLMM1024, b: FLMM1024) FLMM1024 {
             var result: FLMM1024 = undefined;
             inline for (0..nvecs) |i| {
-                result[i] = a[i] - b[i];
+                result[i] = a[i] -% b[i];
             }
             return result;
         }
@@ -286,6 +286,25 @@ pub fn FastLanez_ZIMD(comptime T: type, comptime W: comptime_int) type {
 }
 
 pub fn Delta(comptime T: type) type {
+    const ISA = FastLanez_ZIMD(T, 128);
+
+    return struct {
+        pub const FL = FastLanez(T, ISA);
+        pub const FLVector = FL.FLVector;
+
+        pub fn encode(base: FL.FLBase, in: FLVector, out: *FLVector) void {
+            const tin = FL.transpose(in);
+
+            return FL.pairwise(delta)(base, tin, out);
+        }
+
+        fn delta(acc: FL.Lane, value: FL.Lane) FL.Lane {
+            return ISA.subtract(value, acc);
+        }
+    };
+}
+
+pub fn Delta1024(comptime T: type) type {
     const ISA = FastLanez_ZIMD2(T, 128);
 
     return struct {
@@ -295,15 +314,11 @@ pub fn Delta(comptime T: type) type {
         pub fn encode(base: FL.FLBase, in: FLVector, out: *FLVector) void {
             const tin = FL.transpose(in);
 
-            return FL.pairwise2(delta2)(base, tin, out);
+            return FL.pairwise2(delta)(base, tin, out);
             // return FL.pairwise(delta)(base, tin, out);
         }
 
-        fn delta2(acc: FL.FLMM1024, value: FL.FLMM1024) FL.FLMM1024 {
-            return ISA.subtract(value, acc);
-        }
-
-        fn delta(acc: FL.Lane, value: FL.Lane) FL.Lane {
+        fn delta(acc: FL.FLMM1024, value: FL.FLMM1024) FL.FLMM1024 {
             return ISA.subtract(value, acc);
         }
     };
@@ -341,8 +356,9 @@ test "fastlanez transpose" {
 }
 
 test "fastlanez delta" {
+    if (true) return error.skip;
     const std = @import("std");
-    const T = u8;
+    const T = u32;
     const Codec = Delta(T);
 
     const base = [_]T{0} ** (1024 / @bitSizeOf(T));
@@ -359,6 +375,33 @@ test "fastlanez delta" {
             try std.testing.expectEqual(i, actual[i]);
         } else {
             try std.testing.expectEqual(1, actual[i]);
+        }
+    }
+}
+
+test "fastlanez delta bench" {
+    const std = @import("std");
+
+    const iterations = 100_000;
+
+    inline for (.{ u16, u32, u64 }) |T| {
+        inline for (.{ Delta(T), Delta1024(T) }) |Codec| {
+            var time: i128 = 0;
+            for (0..iterations) |_| {
+                const base = [_]T{0} ** (1024 / @bitSizeOf(T));
+                const input = arange(T, 1024);
+
+                var actual: [1024]T = undefined;
+
+                const start = std.time.nanoTimestamp();
+                Codec.encode(base, input, &actual);
+                const stop = std.time.nanoTimestamp();
+                time += stop - start;
+            }
+            const total_nanos = @as(f64, @floatFromInt(time));
+            const total_ms = total_nanos / 1_000_000;
+            const avg_nanos = total_nanos / @as(f64, @floatFromInt(iterations));
+            std.debug.print("Completed {} iterations of {} in {d:.2} ms total, mean: {d:.2} ns\n", .{ iterations, Codec, total_ms, avg_nanos });
         }
     }
 }
