@@ -286,7 +286,7 @@ pub fn FastLanez_ZIMD(comptime T: type, comptime W: comptime_int) type {
 }
 
 pub fn Delta(comptime T: type) type {
-    const ISA = FastLanez_ZIMD(T, 128);
+    const ISA = FastLanez_ZIMD(T, 64);
 
     return struct {
         pub const FL = FastLanez(T, ISA);
@@ -305,7 +305,7 @@ pub fn Delta(comptime T: type) type {
 }
 
 pub fn Delta1024(comptime T: type) type {
-    const ISA = FastLanez_ZIMD2(T, 128);
+    const ISA = FastLanez_ZIMD2(T, 64);
 
     return struct {
         pub const FL = FastLanez(T, ISA);
@@ -355,53 +355,66 @@ test "fastlanez transpose" {
     try std.testing.expectEqual(transposed[1023], 1023);
 }
 
-test "fastlanez delta" {
-    if (true) return error.skip;
-    const std = @import("std");
-    const T = u32;
-    const Codec = Delta(T);
+// test "fastlanez delta" {
+//     if (true) return error.skip;
+//     const std = @import("std");
+//     const T = u32;
+//     const Codec = Delta(T);
 
-    const base = [_]T{0} ** (1024 / @bitSizeOf(T));
-    const input = arange(T, 1024);
+//     const base = [_]T{0} ** (1024 / @bitSizeOf(T));
+//     const input = arange(T, 1024);
 
-    var actual: [1024]T = undefined;
-    Codec.encode(base, input, &actual);
+//     var actual: [1024]T = undefined;
+//     Codec.encode(base, input, &actual);
 
-    actual = Codec.FL.untranspose(actual);
+//     actual = Codec.FL.untranspose(actual);
 
-    for (0..1024) |i| {
-        // Since fastlanes processes based on 16 blocks, we expect a zero delta every 1024 / 16 = 64 elements.
-        if (i % @bitSizeOf(T) == 0) {
-            try std.testing.expectEqual(i, actual[i]);
-        } else {
-            try std.testing.expectEqual(1, actual[i]);
-        }
-    }
-}
+//     for (0..1024) |i| {
+//         // Since fastlanes processes based on 16 blocks, we expect a zero delta every 1024 / 16 = 64 elements.
+//         if (i % @bitSizeOf(T) == 0) {
+//             try std.testing.expectEqual(i, actual[i]);
+//         } else {
+//             try std.testing.expectEqual(1, actual[i]);
+//         }
+//     }
+// }
 
 test "fastlanez delta bench" {
     const std = @import("std");
 
-    const iterations = 100_000;
+    const warmup = 0;
+    const iterations = 10_000_000;
 
     inline for (.{ u16, u32, u64 }) |T| {
         inline for (.{ Delta(T), Delta1024(T) }) |Codec| {
+            const base = [_]T{0} ** (1024 / @bitSizeOf(T));
+            const input = arange(T, 1024);
+
+            var actual: [1024]T = undefined;
+
+            for (0..warmup) |_| {
+                Codec.encode(base, input, &actual);
+            }
+
             var time: i128 = 0;
             for (0..iterations) |_| {
-                const base = [_]T{0} ** (1024 / @bitSizeOf(T));
-                const input = arange(T, 1024);
-
-                var actual: [1024]T = undefined;
-
                 const start = std.time.nanoTimestamp();
-                Codec.encode(base, input, &actual);
+                @call(.never_inline, Codec.encode, .{ base, input, &actual });
+                // Codec.encode(base, input, &actual);
                 const stop = std.time.nanoTimestamp();
                 time += stop - start;
             }
+
+            const clock_freq = 3.48; // GHz
+
             const total_nanos = @as(f64, @floatFromInt(time));
             const total_ms = total_nanos / 1_000_000;
-            const avg_nanos = total_nanos / @as(f64, @floatFromInt(iterations));
-            std.debug.print("Completed {} iterations of {} in {d:.2} ms total, mean: {d:.2} ns\n", .{ iterations, Codec, total_ms, avg_nanos });
+            const total_cycles = total_nanos * clock_freq;
+
+            const total_elems = iterations * 1024;
+            const elems_per_cycle = total_elems / total_cycles;
+
+            std.debug.print("Completed {} iterations of {}\n\t{d:.2} ms total. {d:.1} elems / cycle\n", .{ iterations, Codec, total_ms, elems_per_cycle });
         }
     }
 }
