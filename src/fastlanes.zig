@@ -367,7 +367,7 @@ fn arange(comptime T: type, comptime n: comptime_int) [n]T {
     const std = @import("std");
     var result: [n]T = undefined;
     for (0..n) |i| {
-        result[i] = @intCast(i % std.math.intMax(T));
+        result[i] = @intCast(i % std.math.maxInt(T));
     }
     return result;
 }
