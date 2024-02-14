@@ -280,7 +280,7 @@ pub fn FastLanez_ZIMD(comptime T: type, comptime W: comptime_int) type {
         }
 
         inline fn subtract(a: Lane, b: Lane) Lane {
-            return a - b;
+            return a -% b;
         }
     };
 }
@@ -364,9 +364,10 @@ test "fastlanez delta" {
 }
 
 fn arange(comptime T: type, comptime n: comptime_int) [n]T {
+    const std = @import("std");
     var result: [n]T = undefined;
     for (0..n) |i| {
-        result[i] = @intCast(i);
+        result[i] = @intCast(i % std.math.intMax(T));
     }
     return result;
 }
