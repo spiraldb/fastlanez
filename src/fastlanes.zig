@@ -342,7 +342,7 @@ test "fastlanez transpose" {
 
 test "fastlanez delta" {
     const std = @import("std");
-    const T = u32;
+    const T = u8;
     const Codec = Delta(T);
 
     const base = [_]T{0} ** (1024 / @bitSizeOf(T));
