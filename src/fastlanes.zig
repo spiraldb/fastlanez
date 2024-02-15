@@ -65,6 +65,26 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
             break :blk _offsets1024;
         };
 
+        pub fn load(ptr: *const anyopaque, n: comptime_int) FLMM1024 {
+            const bytes: [*]const u8 = @ptrCast(ptr);
+            return @bitCast(bytes[128 * n ..][0..128].*);
+        }
+
+        pub fn loadT(ptr: *const anyopaque, n: comptime_int) FLMM1024 {
+            const div = 128 / T;
+            return load(ptr, offsets1024[n] / div);
+        }
+
+        pub fn store(ptr: *anyopaque, n: comptime_int, vec: FLMM1024) void {
+            const bytes: [*]u8 = @ptrCast(ptr);
+            bytes[128 * n ..][0..128].* = @bitCast(vec);
+        }
+
+        pub fn storeT(ptr: *anyopaque, n: comptime_int, vec: FLMM1024) void {
+            const div = 128 / T;
+            return store(ptr, offsets1024[n] / div, vec);
+        }
+
         /// Shuffle the input vector into the unified transpose order.
         /// TODO(ngates): not sure there's much better than a scalar loop here.
         pub fn transpose(vec: Vector) Vector {
@@ -138,6 +158,8 @@ pub fn FastLanez_ZIMD(comptime E: type, comptime W: comptime_int) type {
     const nelems = 1024 / @bitSizeOf(E);
 
     return struct {
+        // Our FLMM1024 type.
+
         pub const Width = W;
         pub const FLMM1024 = [nvecs]V;
 
@@ -190,18 +212,18 @@ pub fn FastLanez_ZIMD(comptime E: type, comptime W: comptime_int) type {
     };
 }
 
-pub fn Delta(comptime T: type) type {
-    const ISA = FastLanez_ZIMD(T, 128);
+pub fn Delta(comptime E: type) type {
+    const ISA = FastLanez_ZIMD(E, 128);
 
     return struct {
-        pub const FL = FastLanez(T, ISA);
+        pub const FL = FastLanez(E, ISA);
 
-        pub fn encode(base: FL.Base, in: FL.Vector, out: *FL.Vector) void {
-            var prev = ISA.load(&base);
-            inline for (FL.offsets1024) |o| {
-                const next = ISA.load(in[o..][0..FL.S]);
+        pub fn encode(base: *const FL.Base, in: *const FL.Vector, out: *FL.Vector) void {
+            var prev = FL.load(base, 0);
+            inline for (0..FL.T) |i| {
+                const next = FL.loadT(in, i);
                 const result = ISA.subtract(next, prev);
-                ISA.store(result, out[o..][0..FL.S]);
+                FL.storeT(out, i, result);
                 prev = next;
             }
         }
@@ -212,14 +234,15 @@ pub fn BitPacking(comptime E: type, comptime P: type) type {
     const ISA = FastLanez_ZIMD(E, 128);
 
     // The packed size
-    const T = @bitSizeOf(E);
     const W = @bitSizeOf(P);
+    const B = 128 * W;
 
     return struct {
         pub const FL = FastLanez(E, ISA);
         pub const Vector = FL.Vector;
 
-        pub fn decode(in: *const [W]FL.FLMM1024, out: *[T]FL.FLMM1024) void {
+        /// Decode a packed byte stream in to a 1024 element vector.
+        pub fn decode(in: *const [B]u8, out: *FL.Vector) void {
             // Add so our code more closely matches the psuedo-code
             var mask: [W + 1]E = undefined;
             inline for (0..W) |i| {
@@ -229,25 +252,25 @@ pub fn BitPacking(comptime E: type, comptime P: type) type {
             var r0: FL.FLMM1024 = undefined;
             var r1: FL.FLMM1024 = undefined;
 
-            r0 = in[0];
+            r0 = FL.load(in, 0);
             r1 = FL.and_rshift(r0, 0, mask[3]);
-            out[0] = r1;
+            FL.store(out, 0, r1);
             r1 = FL.and_rshift(r0, 3, mask[3]);
-            out[1] = r1;
+            FL.store(out, 1, r1);
             r1 = FL.and_rshift(r0, 6, mask[2]);
-            r0 = in[1];
-            out[2] = FL.or_(r1, FL.and_lshift(r0, 2, mask[1]));
+            r0 = FL.load(in, 1);
+            FL.store(out, 2, FL.or_(r1, FL.and_lshift(r0, 2, mask[1])));
             r1 = FL.and_rshift(r0, 1, mask[3]);
-            out[3] = r1;
+            FL.store(out, 3, r1);
             r1 = FL.and_rshift(r0, 4, mask[3]);
-            out[4] = r1;
+            FL.store(out, 4, r1);
             r1 = FL.and_rshift(r0, 7, mask[1]);
-            r0 = in[2];
-            out[5] = FL.or_(r1, FL.and_lshift(r0, 1, mask[2]));
+            r0 = FL.load(in, 2);
+            FL.store(out, 5, FL.or_(r1, FL.and_lshift(r0, 1, mask[2])));
             r1 = FL.and_rshift(r0, 2, mask[3]);
-            out[6] = r1;
+            FL.store(out, 6, r1);
             r1 = FL.and_rshift(r0, 5, mask[3]);
-            out[7] = r1;
+            FL.store(out, 7, r1);
         }
     };
 }
@@ -269,41 +292,39 @@ test "fastlanez transpose" {
     try std.testing.expectEqual(transposed[1023], 1023);
 }
 
-// test "fastlanez delta" {
-//     if (true) return error.skip;
-//     const std = @import("std");
-//     const T = u32;
-//     const Codec = Delta(T);
+test "fastlanez delta" {
+    const std = @import("std");
+    const T = u32;
+    const Codec = Delta(T);
 
-//     const base = [_]T{0} ** (1024 / @bitSizeOf(T));
-//     const input = arange(T, 1024);
+    const base = [_]T{0} ** (1024 / @bitSizeOf(T));
+    const input = arange(T, 1024);
 
-//     var actual: [1024]T = undefined;
-//     Codec.encode(base, input, &actual);
+    var actual: [1024]T = undefined;
+    Codec.encode(&base, &input, &actual);
 
-//     actual = Codec.FL.untranspose(actual);
+    actual = Codec.FL.untranspose(actual);
 
-//     for (0..1024) |i| {
-//         // Since fastlanes processes based on 16 blocks, we expect a zero delta every 1024 / 16 = 64 elements.
-//         if (i % @bitSizeOf(T) == 0) {
-//             try std.testing.expectEqual(i, actual[i]);
-//         } else {
-//             try std.testing.expectEqual(1, actual[i]);
-//         }
-//     }
-// }
+    for (0..1024) |i| {
+        // Since fastlanes processes based on 16 blocks, we expect a zero delta every 1024 / 16 = 64 elements.
+        if (i % @bitSizeOf(T) == 0) {
+            try std.testing.expectEqual(i, actual[i]);
+        } else {
+            try std.testing.expectEqual(1, actual[i]);
+        }
+    }
+}
 
 test "fastlanez bitpack" {
     const std = @import("std");
 
     const Codec = BitPacking(u8, u3);
-    const FL = Codec.FL;
 
-    const input: [3]FL.FLMM1024 = @bitCast(repeat(u8, 255, 384)); // Setup an input of all "1" bits.
-    var output: [8]FL.FLMM1024 = undefined;
-    Codec.decode(&@bitCast(input), &output);
+    const input: [384]u8 = @bitCast(repeat(u8, 255, 384)); // Setup an input of all "1" bits.
+    var output: [1024]u8 = undefined;
+    Codec.decode(&input, &output);
 
-    try std.testing.expectEqual(@as([1024]u8, @bitCast(output)), repeat(u8, 7, 1024));
+    try std.testing.expectEqual(output, repeat(u8, 7, 1024));
 }
 
 test "fastlanez delta bench" {
@@ -328,7 +349,7 @@ test "fastlanez delta bench" {
             for (0..iterations) |_| {
                 const start = std.time.nanoTimestamp();
                 var actual: [1024]T = undefined;
-                Codec.encode(base, input, &actual);
+                Codec.encode(&base, &input, &actual);
                 std.mem.doNotOptimizeAway(actual);
                 // Codec.encode(base, input, &actual);
                 const stop = std.time.nanoTimestamp();
