@@ -9,7 +9,10 @@
 // all this back into memory.
 
 pub fn FastLanez(comptime E: type, comptime ISA: type) type {
-    const V = @Vector(1024, E);
+    // The type of a single lane of the ISA.
+    const Lane = ISA.Lane;
+    const NLanes = 1024 / @bitSizeOf(Lane);
+    const Lanes = [NLanes]ISA.Lane;
 
     // This unified transpose layout allows us to operate efficiently using a variety of SIMD lane widths.
     const ORDER: [8]u8 = .{ 0, 4, 2, 6, 1, 5, 3, 7 };
@@ -48,10 +51,10 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
         const Base = [S]E;
 
         /// Represents the fastlanes virtual 1024-bit SIMD register.
-        pub const MM1024 = ISA.MM1024;
+        pub const MM1024 = Lanes;
 
         /// Offset required to iterate over 1024 bit vectors according to the unified transpose order.
-        pub const offsets: [T]u8 = blk: {
+        const offsets: [T]u8 = blk: {
             var _offsets: [T]u8 = undefined;
             var offset = 0;
             for (0..T / 8) |order| {
@@ -61,21 +64,6 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
                 }
             }
             break :blk _offsets;
-        };
-
-        /// Element offset required to iterate over 1024 bit vectors according to the unified transpose order.
-        pub const offsets1024: [T]u32 = blk: {
-            var _offsets1024: [T]u32 = undefined;
-            var offset = 0;
-            for (0..T / 8) |o| {
-                const order_offset = ORDER[o] * 16;
-                for (0..8) |row| {
-                    const row_offset = 128 * row;
-                    _offsets1024[offset] = (order_offset + row_offset) / S;
-                    offset += 1;
-                }
-            }
-            break :blk _offsets1024;
         };
 
         pub inline fn load(ptr: *const anyopaque, n: comptime_int) MM1024 {
@@ -97,134 +85,108 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
         }
 
         /// Shuffle the input vector into the unified transpose order.
-        /// TODO(ngates): not sure there's much better than a scalar loop here.
         pub fn transpose(vec: Vector) Vector {
+            // We defer to LLVM to attempt to optimize this transpose.
+            const V = @Vector(1024, E);
             return @shuffle(E, @as(V, vec), @as(V, vec), transpose_mask);
         }
 
         /// Unshuffle the input vector from the unified transpose order.
         pub fn untranspose(vec: Vector) Vector {
+            // We defer to LLVM to attempt to optimize this transpose.
+            const V = @Vector(1024, E);
             return @shuffle(E, @as(V, vec), @as(V, vec), untranspose_mask);
         }
 
+        pub inline fn subtract(a: MM1024, b: MM1024) MM1024 {
+            @setEvalBranchQuota(4096);
+            var result: Lanes = undefined;
+            inline for (@as(Lanes, a), @as(Lanes, b), 0..) |lane_a, lane_b, i| {
+                result[i] = ISA.subtract(lane_a, lane_b);
+            }
+            return @bitCast(result);
+        }
+
         pub inline fn or_(a: MM1024, b: MM1024) MM1024 {
-            return ISA.or_(a, b);
+            var result: Lanes = undefined;
+            inline for (@as(Lanes, a), @as(Lanes, b), 0..) |lane_a, lane_b, i| {
+                result[i] = ISA.or_(lane_a, lane_b);
+            }
+            return @bitCast(result);
         }
 
         // forall T−bit lanes i in REG return (i & MASK) << N
         pub inline fn and_lshift(vec: MM1024, n: anytype, mask: E) MM1024 {
-            return ISA.and_lshift(vec, n, mask);
+            var result: Lanes = undefined;
+            inline for (@as(Lanes, vec), 0..) |lane, i| {
+                result[i] = ISA.and_lshift(lane, n, mask);
+            }
+            return @bitCast(result);
         }
 
         // forall T−bit lanes i in REG return (i & (MASK << N)) >> N
         pub inline fn and_rshift(vec: MM1024, n: anytype, mask: E) MM1024 {
-            return ISA.and_rshift(vec, n, mask);
-        }
-    };
-}
-
-/// A FastLanez ISA implemented using 64-bit unsigned integers.
-pub fn FastLanez_U64(comptime T: type) type {
-    return struct {
-        const Width = 64;
-        const LaneWidth = 64 / @bitSizeOf(T);
-        const Lane = u64;
-
-        inline fn load(elems: *const [Width]T) Lane {
-            return @bitCast(elems.*);
-        }
-
-        inline fn store(lane: Lane, elems: *[Width]T) void {
-            elems.* = @bitCast(lane);
-        }
-
-        // forall T−bit lanes i in REG return (i & MASK) << N
-        inline fn and_lshift(lane: Lane, n: anytype, mask: Lane) Lane {
-            // TODO(ngates): can we make this more efficient?
-            const nVec: Lane = @splat(n);
-            return (lane & mask) << @intCast(nVec);
-        }
-
-        // forall T−bit lanes i in REG return (i & (MASK << N)) >> N
-        inline fn and_rshift(lane: Lane, n: anytype, mask: Lane) Lane {
-            const nVec: Lane = @splat(n);
-            return (lane & (mask << nVec)) >> @intCast(nVec);
-        }
-
-        inline fn subtract(a: Lane, b: Lane) Lane {
-            const a_vec: [LaneWidth]T = @bitCast(a);
-            const b_vec: [LaneWidth]T = @bitCast(b);
-            var result: [LaneWidth]T = undefined;
-            for (0..LaneWidth) |l| {
-                result[l] = a_vec[l] - b_vec[l];
+            var result: Lanes = undefined;
+            inline for (@as(Lanes, vec), 0..) |lane, i| {
+                result[i] = ISA.and_rshift(lane, n, mask);
             }
             return @bitCast(result);
         }
     };
 }
 
-pub fn FastLanez_ZIMD(comptime E: type, comptime W: comptime_int) type {
-    const V = @Vector(W / @bitSizeOf(E), E);
-    const nvecs = 1024 / W;
-    const nelems = 1024 / @bitSizeOf(E);
-
+/// A FastLanez ISA implemented using scalar operations.
+pub fn FastLanez_Scalar(comptime E: type) type {
     return struct {
-        // Our MM1024 type.
-
-        pub const Width = W;
-        pub const MM1024 = [nvecs]V;
-
-        inline fn load(elems: *const [nelems]E) MM1024 {
-            return @bitCast(elems.*);
-        }
-
-        inline fn store(register: MM1024, elems: *[nelems]E) void {
-            elems.* = @bitCast(register);
-        }
-
-        inline fn subtract(a: MM1024, b: MM1024) MM1024 {
-            var result: MM1024 = undefined;
-            inline for (0..nvecs) |i| {
-                result[i] = a[i] -% b[i];
-            }
-            return result;
-        }
-
-        inline fn or_(a: MM1024, b: MM1024) MM1024 {
-            var result: MM1024 = undefined;
-            inline for (0..nvecs) |i| {
-                result[i] = a[i] | b[i];
-            }
-            return result;
-        }
+        pub const Lane = E;
 
         // forall T−bit lanes i in REG return (i & MASK) << N
-        inline fn and_lshift(reg: MM1024, n: u8, mask: E) MM1024 {
-            // TODO(ngates): can we make this more efficient?
-            var result: MM1024 = undefined;
-            const maskvec: V = @splat(mask);
-            inline for (0..nvecs) |i| {
-                const nvec: V = @splat(n);
-                result[i] = (reg[i] & maskvec) << @intCast(nvec);
-            }
-            return result;
+        inline fn and_lshift(lane: Lane, n: anytype, mask: Lane) Lane {
+            return lane & mask << n;
         }
 
         // forall T−bit lanes i in REG return (i & (MASK << N)) >> N
-        inline fn and_rshift(reg: MM1024, n: u8, mask: E) MM1024 {
-            var result: MM1024 = undefined;
-            const maskvec: V = @splat(mask);
-            inline for (0..nvecs) |i| {
-                const nvec: V = @splat(n);
-                result[i] = (reg[i] & (maskvec << nvec)) >> @intCast(nvec);
-            }
-            return result;
+        inline fn and_rshift(lane: Lane, n: anytype, mask: Lane) Lane {
+            return lane & (mask << n) >> n;
+        }
+
+        inline fn subtract(a: Lane, b: Lane) Lane {
+            return a -% b;
+        }
+    };
+}
+
+pub fn FastLanez_ZIMD(comptime E: type, comptime W: comptime_int) type {
+    return struct {
+        pub const Lane = @Vector(W / @bitSizeOf(E), E);
+
+        inline fn subtract(a: Lane, b: Lane) Lane {
+            return a -% b;
+        }
+
+        inline fn or_(a: Lane, b: Lane) Lane {
+            return a | b;
+        }
+
+        // forall T−bit lanes i in REG return (i & MASK) << N
+        inline fn and_lshift(lane: Lane, n: u8, mask: E) Lane {
+            const maskvec: Lane = @splat(mask);
+            const nvec: Lane = @splat(n);
+            return (lane & maskvec) << @intCast(nvec);
+        }
+
+        // forall T−bit lanes i in REG return (i & (MASK << N)) >> N
+        inline fn and_rshift(lane: Lane, n: u8, mask: E) Lane {
+            const maskvec: Lane = @splat(mask);
+            const nvec: Lane = @splat(n);
+            return (lane & (maskvec << nvec)) >> @intCast(nvec);
         }
     };
 }
 
 pub fn Delta(comptime E: type) type {
-    const ISA = FastLanez_ZIMD(E, 128);
+    const ISA = FastLanez_ZIMD(E, 1024);
+    // const ISA = FastLanez_Scalar(E);
 
     return struct {
         const std = @import("std");
@@ -234,7 +196,7 @@ pub fn Delta(comptime E: type) type {
             var prev: FL.MM1024 = @bitCast(base.*);
             inline for (0..FL.T) |i| {
                 const next: FL.MM1024 = FL.loadT(in, i);
-                const result = ISA.subtract(next, prev);
+                const result = FL.subtract(next, prev);
                 FL.storeT(out, i, result);
                 prev = next;
             }
