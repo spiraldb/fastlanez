@@ -193,7 +193,7 @@ pub fn Delta(comptime E: type) type {
         pub const FL = FastLanez(E, ISA);
 
         pub fn encode(base: *const [FL.S]E, in: *const FL.Vector, out: *FL.Vector) void {
-            var prev: FL.MM1024 = @bitCast(base.*);
+            var prev = FL.load(base, 0);
             inline for (0..FL.T) |i| {
                 const next = FL.loadT(in, i);
                 const result = FL.subtract(next, prev);
