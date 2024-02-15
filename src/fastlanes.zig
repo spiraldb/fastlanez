@@ -66,21 +66,21 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
             break :blk _offsets;
         };
 
-        pub inline fn load(ptr: *const anyopaque, n: comptime_int) MM1024 {
+        pub inline fn load(ptr: *const anyopaque, n: u8) align(64) MM1024 {
             const regs: [*]const [128]u8 = @ptrCast(ptr);
             return @bitCast(regs[n]);
         }
 
-        pub inline fn loadT(ptr: *const anyopaque, n: comptime_int) MM1024 {
+        pub inline fn loadT(ptr: *const anyopaque, n: usize) align(64) MM1024 {
             return load(ptr, offsets[n]);
         }
 
-        pub inline fn store(ptr: *anyopaque, n: comptime_int, vec: MM1024) void {
+        pub inline fn store(ptr: *anyopaque, n: usize, vec: MM1024) void {
             const regs: [*][128]u8 = @ptrCast(ptr);
             regs[n] = @bitCast(vec);
         }
 
-        pub inline fn storeT(ptr: *anyopaque, n: comptime_int, vec: MM1024) void {
+        pub inline fn storeT(ptr: *anyopaque, n: usize, vec: MM1024) void {
             store(ptr, offsets[n], vec);
         }
 
@@ -140,18 +140,20 @@ pub fn FastLanez_ISA_Scalar(comptime E: type) type {
     return struct {
         pub const Lane = E;
 
-        // forall T−bit lanes i in REG return (i & MASK) << N
+        inline fn subtract(a: Lane, b: Lane) Lane {
+            return a -% b;
+        }
+
+        inline fn or_(a: Lane, b: Lane) Lane {
+            return a | b;
+        }
+
         inline fn and_lshift(lane: Lane, n: anytype, mask: Lane) Lane {
             return lane & mask << n;
         }
 
-        // forall T−bit lanes i in REG return (i & (MASK << N)) >> N
         inline fn and_rshift(lane: Lane, n: anytype, mask: Lane) Lane {
             return lane & (mask << n) >> n;
-        }
-
-        inline fn subtract(a: Lane, b: Lane) Lane {
-            return a -% b;
         }
     };
 }
@@ -168,14 +170,12 @@ pub fn FastLanez_ISA_ZIMD(comptime E: type, comptime W: comptime_int) type {
             return a | b;
         }
 
-        // forall T−bit lanes i in REG return (i & MASK) << N
         inline fn and_lshift(lane: Lane, n: u8, mask: E) Lane {
             const maskvec: Lane = @splat(mask);
             const nvec: Lane = @splat(n);
             return (lane & maskvec) << @intCast(nvec);
         }
 
-        // forall T−bit lanes i in REG return (i & (MASK << N)) >> N
         inline fn and_rshift(lane: Lane, n: u8, mask: E) Lane {
             const maskvec: Lane = @splat(mask);
             const nvec: Lane = @splat(n);
@@ -185,8 +185,8 @@ pub fn FastLanez_ISA_ZIMD(comptime E: type, comptime W: comptime_int) type {
 }
 
 pub fn Delta(comptime E: type) type {
-    const ISA = FastLanez_ISA_ZIMD(E, 1024);
-    // const ISA = FastLanez_ISA_Scalar(E);
+    //const ISA = FastLanez_ISA_ZIMD(E, 1024);
+    const ISA = FastLanez_ISA_Scalar(E);
 
     return struct {
         const std = @import("std");
@@ -225,6 +225,10 @@ pub fn BitPacking(comptime E: type, comptime P: type) type {
 
             var r0: FL.MM1024 = undefined;
             var r1: FL.MM1024 = undefined;
+
+            // TODO(ngates): can we just use loadT/storeT always?
+            // Don't think so. Since FL is specialized to E, rather than P.
+            // If each function took a type, then perhaps?
 
             r0 = FL.load(in, 0);
             r1 = FL.and_rshift(r0, 0, mask[3]);
