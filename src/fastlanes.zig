@@ -48,9 +48,22 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
         const Base = [S]E;
 
         /// Represents the fastlanes virtual 1024-bit SIMD register.
-        pub const FLMM1024 = ISA.FLMM1024;
+        pub const MM1024 = ISA.MM1024;
 
-        /// Element offsets required to iterate over 1024 bit vectors according to the unified transpose order.
+        /// Offset required to iterate over 1024 bit vectors according to the unified transpose order.
+        pub const offsets: [T]u8 = blk: {
+            var _offsets: [T]u8 = undefined;
+            var offset = 0;
+            for (0..T / 8) |order| {
+                for (0..8) |row| {
+                    _offsets[offset] = order + ((T / 8) * row);
+                    offset += 1;
+                }
+            }
+            break :blk _offsets;
+        };
+
+        /// Element offset required to iterate over 1024 bit vectors according to the unified transpose order.
         pub const offsets1024: [T]u32 = blk: {
             var _offsets1024: [T]u32 = undefined;
             var offset = 0;
@@ -58,31 +71,29 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
                 const order_offset = ORDER[o] * 16;
                 for (0..8) |row| {
                     const row_offset = 128 * row;
-                    _offsets1024[offset] = order_offset + row_offset;
+                    _offsets1024[offset] = (order_offset + row_offset) / S;
                     offset += 1;
                 }
             }
             break :blk _offsets1024;
         };
 
-        pub fn load(ptr: *const anyopaque, n: comptime_int) FLMM1024 {
-            const bytes: [*]const u8 = @ptrCast(ptr);
-            return @bitCast(bytes[128 * n ..][0..128].*);
+        pub inline fn load(ptr: *const anyopaque, n: comptime_int) MM1024 {
+            const regs: [*]const [128]u8 = @ptrCast(ptr);
+            return @bitCast(regs[n]);
         }
 
-        pub fn loadT(ptr: *const anyopaque, n: comptime_int) FLMM1024 {
-            const div = 128 / T;
-            return load(ptr, offsets1024[n] / div);
+        pub inline fn loadT(ptr: *const anyopaque, n: comptime_int) MM1024 {
+            return load(ptr, offsets[n]);
         }
 
-        pub fn store(ptr: *anyopaque, n: comptime_int, vec: FLMM1024) void {
-            const bytes: [*]u8 = @ptrCast(ptr);
-            bytes[128 * n ..][0..128].* = @bitCast(vec);
+        pub inline fn store(ptr: *anyopaque, n: comptime_int, vec: MM1024) void {
+            const regs: [*][128]u8 = @ptrCast(ptr);
+            regs[n] = @bitCast(vec);
         }
 
-        pub fn storeT(ptr: *anyopaque, n: comptime_int, vec: FLMM1024) void {
-            const div = 128 / T;
-            return store(ptr, offsets1024[n] / div, vec);
+        pub inline fn storeT(ptr: *anyopaque, n: comptime_int, vec: MM1024) void {
+            store(ptr, offsets[n], vec);
         }
 
         /// Shuffle the input vector into the unified transpose order.
@@ -96,17 +107,17 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
             return @shuffle(E, @as(V, vec), @as(V, vec), untranspose_mask);
         }
 
-        pub inline fn or_(a: FLMM1024, b: FLMM1024) FLMM1024 {
+        pub inline fn or_(a: MM1024, b: MM1024) MM1024 {
             return ISA.or_(a, b);
         }
 
         // forall T−bit lanes i in REG return (i & MASK) << N
-        pub inline fn and_lshift(vec: FLMM1024, n: anytype, mask: E) FLMM1024 {
+        pub inline fn and_lshift(vec: MM1024, n: anytype, mask: E) MM1024 {
             return ISA.and_lshift(vec, n, mask);
         }
 
         // forall T−bit lanes i in REG return (i & (MASK << N)) >> N
-        pub inline fn and_rshift(vec: FLMM1024, n: anytype, mask: E) FLMM1024 {
+        pub inline fn and_rshift(vec: MM1024, n: anytype, mask: E) MM1024 {
             return ISA.and_rshift(vec, n, mask);
         }
     };
@@ -158,29 +169,29 @@ pub fn FastLanez_ZIMD(comptime E: type, comptime W: comptime_int) type {
     const nelems = 1024 / @bitSizeOf(E);
 
     return struct {
-        // Our FLMM1024 type.
+        // Our MM1024 type.
 
         pub const Width = W;
-        pub const FLMM1024 = [nvecs]V;
+        pub const MM1024 = [nvecs]V;
 
-        inline fn load(elems: *const [nelems]E) FLMM1024 {
+        inline fn load(elems: *const [nelems]E) MM1024 {
             return @bitCast(elems.*);
         }
 
-        inline fn store(register: FLMM1024, elems: *[nelems]E) void {
+        inline fn store(register: MM1024, elems: *[nelems]E) void {
             elems.* = @bitCast(register);
         }
 
-        inline fn subtract(a: FLMM1024, b: FLMM1024) FLMM1024 {
-            var result: FLMM1024 = undefined;
+        inline fn subtract(a: MM1024, b: MM1024) MM1024 {
+            var result: MM1024 = undefined;
             inline for (0..nvecs) |i| {
                 result[i] = a[i] -% b[i];
             }
             return result;
         }
 
-        inline fn or_(a: FLMM1024, b: FLMM1024) FLMM1024 {
-            var result: FLMM1024 = undefined;
+        inline fn or_(a: MM1024, b: MM1024) MM1024 {
+            var result: MM1024 = undefined;
             inline for (0..nvecs) |i| {
                 result[i] = a[i] | b[i];
             }
@@ -188,9 +199,9 @@ pub fn FastLanez_ZIMD(comptime E: type, comptime W: comptime_int) type {
         }
 
         // forall T−bit lanes i in REG return (i & MASK) << N
-        inline fn and_lshift(reg: FLMM1024, n: u8, mask: E) FLMM1024 {
+        inline fn and_lshift(reg: MM1024, n: u8, mask: E) MM1024 {
             // TODO(ngates): can we make this more efficient?
-            var result: FLMM1024 = undefined;
+            var result: MM1024 = undefined;
             const maskvec: V = @splat(mask);
             inline for (0..nvecs) |i| {
                 const nvec: V = @splat(n);
@@ -200,8 +211,8 @@ pub fn FastLanez_ZIMD(comptime E: type, comptime W: comptime_int) type {
         }
 
         // forall T−bit lanes i in REG return (i & (MASK << N)) >> N
-        inline fn and_rshift(reg: FLMM1024, n: u8, mask: E) FLMM1024 {
-            var result: FLMM1024 = undefined;
+        inline fn and_rshift(reg: MM1024, n: u8, mask: E) MM1024 {
+            var result: MM1024 = undefined;
             const maskvec: V = @splat(mask);
             inline for (0..nvecs) |i| {
                 const nvec: V = @splat(n);
@@ -216,12 +227,13 @@ pub fn Delta(comptime E: type) type {
     const ISA = FastLanez_ZIMD(E, 128);
 
     return struct {
+        const std = @import("std");
         pub const FL = FastLanez(E, ISA);
 
         pub fn encode(base: *const FL.Base, in: *const FL.Vector, out: *FL.Vector) void {
-            var prev = FL.load(base, 0);
+            var prev: FL.MM1024 = @bitCast(base.*);
             inline for (0..FL.T) |i| {
-                const next = FL.loadT(in, i);
+                const next: FL.MM1024 = FL.loadT(in, i);
                 const result = ISA.subtract(next, prev);
                 FL.storeT(out, i, result);
                 prev = next;
@@ -249,8 +261,8 @@ pub fn BitPacking(comptime E: type, comptime P: type) type {
                 mask[i + 1] = (1 << (i + 1)) - 1;
             }
 
-            var r0: FL.FLMM1024 = undefined;
-            var r1: FL.FLMM1024 = undefined;
+            var r0: FL.MM1024 = undefined;
+            var r1: FL.MM1024 = undefined;
 
             r0 = FL.load(in, 0);
             r1 = FL.and_rshift(r0, 0, mask[3]);
@@ -294,14 +306,15 @@ test "fastlanez transpose" {
 
 test "fastlanez delta" {
     const std = @import("std");
-    const T = u32;
+    const T = u16;
     const Codec = Delta(T);
 
     const base = [_]T{0} ** (1024 / @bitSizeOf(T));
     const input = arange(T, 1024);
+    const tinput = Codec.FL.transpose(input);
 
     var actual: [1024]T = undefined;
-    Codec.encode(&base, &input, &actual);
+    Codec.encode(&base, &tinput, &actual);
 
     actual = Codec.FL.untranspose(actual);
 
@@ -329,9 +342,11 @@ test "fastlanez bitpack" {
 
 test "fastlanez delta bench" {
     const std = @import("std");
+    const builtin = @import("builtin");
+    const dbg = builtin.mode == .Debug;
 
     const warmup = 0;
-    const iterations = 10_000_000;
+    const iterations = if (dbg) 1_000 else 10_000_000;
 
     // if (true) return;
 
