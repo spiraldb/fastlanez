@@ -188,6 +188,7 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
 pub fn FastLanez_U64(comptime T: type) type {
     return struct {
         const Width = 64;
+        const LaneWidth = 64 / @bitSizeOf(T);
         const Lane = u64;
 
         inline fn load(elems: *const [Width]T) Lane {
@@ -212,9 +213,13 @@ pub fn FastLanez_U64(comptime T: type) type {
         }
 
         inline fn subtract(a: Lane, b: Lane) Lane {
-            const a_vec: @Vector(64 / @bitSizeOf(T), T) = @bitCast(a);
-            const b_vec: @Vector(64 / @bitSizeOf(T), T) = @bitCast(b);
-            return @bitCast(a_vec - b_vec);
+            const a_vec: [LaneWidth]T = @bitCast(a);
+            const b_vec: [LaneWidth]T = @bitCast(b);
+            var result: [LaneWidth]T = undefined;
+            for (0..LaneWidth) |l| {
+                result[l] = a_vec[l] - b_vec[l];
+            }
+            return @bitCast(result);
         }
     };
 }
@@ -286,16 +291,17 @@ pub fn FastLanez_ZIMD(comptime T: type, comptime W: comptime_int) type {
 }
 
 pub fn Delta(comptime T: type) type {
-    const ISA = FastLanez_ZIMD(T, 64);
+    const ISA = FastLanez_ZIMD(T, 128);
+    // const ISA = FastLanez_U64(T);
 
     return struct {
         pub const FL = FastLanez(T, ISA);
         pub const FLVector = FL.FLVector;
 
         pub fn encode(base: FL.FLBase, in: FLVector, out: *FLVector) void {
-            const tin = FL.transpose(in);
+            // const tin = FL.transpose(in);
 
-            return FL.pairwise(delta)(base, tin, out);
+            return FL.pairwise(delta)(base, in, out);
         }
 
         fn delta(acc: FL.Lane, value: FL.Lane) FL.Lane {
@@ -305,16 +311,16 @@ pub fn Delta(comptime T: type) type {
 }
 
 pub fn Delta1024(comptime T: type) type {
-    const ISA = FastLanez_ZIMD2(T, 64);
+    const ISA = FastLanez_ZIMD2(T, 128);
 
     return struct {
         pub const FL = FastLanez(T, ISA);
         pub const FLVector = FL.FLVector;
 
         pub fn encode(base: FL.FLBase, in: FLVector, out: *FLVector) void {
-            const tin = FL.transpose(in);
+            // const tin = FL.transpose(in);
 
-            return FL.pairwise2(delta)(base, tin, out);
+            return FL.pairwise2(delta)(base, in, out);
             // return FL.pairwise(delta)(base, tin, out);
         }
 
@@ -346,6 +352,8 @@ test "fastlanez transpose" {
 
     const input: FL.FLVector = arange(T, 1024);
     const transposed = FL.transpose(input);
+    const transposed2 = FL.transpose(input);
+    _ = transposed2;
 
     try std.testing.expectEqual(transposed[0], 0);
     try std.testing.expectEqual(transposed[1], 64);
@@ -383,23 +391,24 @@ test "fastlanez delta bench" {
     const std = @import("std");
 
     const warmup = 0;
-    const iterations = 10_000_000;
+    const iterations = 1_000_000;
 
     inline for (.{ u16, u32, u64 }) |T| {
         inline for (.{ Delta(T), Delta1024(T) }) |Codec| {
             const base = [_]T{0} ** (1024 / @bitSizeOf(T));
             const input = arange(T, 1024);
 
-            var actual: [1024]T = undefined;
-
             for (0..warmup) |_| {
+                var actual: [1024]T = undefined;
                 Codec.encode(base, input, &actual);
             }
 
             var time: i128 = 0;
             for (0..iterations) |_| {
                 const start = std.time.nanoTimestamp();
-                @call(.never_inline, Codec.encode, .{ base, input, &actual });
+                var actual: [1024]T = undefined;
+                Codec.encode(base, input, &actual);
+                std.mem.doNotOptimizeAway(actual);
                 // Codec.encode(base, input, &actual);
                 const stop = std.time.nanoTimestamp();
                 time += stop - start;
@@ -413,8 +422,14 @@ test "fastlanez delta bench" {
 
             const total_elems = iterations * 1024;
             const elems_per_cycle = total_elems / total_cycles;
+            const cycles_per_elem = total_cycles / total_elems;
 
-            std.debug.print("Completed {} iterations of {}\n\t{d:.2} ms total. {d:.1} elems / cycle\n", .{ iterations, Codec, total_ms, elems_per_cycle });
+            std.debug.print("Completed {} iterations of {}\n", .{ iterations, Codec });
+            std.debug.print("\t{d:.2} ms total.\n", .{total_ms});
+            std.debug.print("\t{d:.1} elems / cycle\n", .{elems_per_cycle});
+            std.debug.print("\t{d:.1} cycles / elem\n", .{cycles_per_elem});
+            std.debug.print("\t{d:.2} billion elems / second\n", .{total_elems / total_nanos});
+            std.debug.print("\n", .{});
         }
     }
 }
