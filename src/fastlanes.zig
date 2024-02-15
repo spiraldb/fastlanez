@@ -43,12 +43,12 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
     };
 
     return struct {
+        /// The bit size of the element type.
         pub const T = @bitSizeOf(E);
+        /// The number of elements in a single MM1024 register.
         pub const S = 1024 / T;
 
-        /// A FL vector captures 1024 elements of type E.
         const Vector = [1024]E;
-        const Base = [S]E;
 
         /// Represents the fastlanes virtual 1024-bit SIMD register.
         pub const MM1024 = Lanes;
@@ -136,7 +136,7 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
 }
 
 /// A FastLanez ISA implemented using scalar operations.
-pub fn FastLanez_Scalar(comptime E: type) type {
+pub fn FastLanez_ISA_Scalar(comptime E: type) type {
     return struct {
         pub const Lane = E;
 
@@ -156,7 +156,7 @@ pub fn FastLanez_Scalar(comptime E: type) type {
     };
 }
 
-pub fn FastLanez_ZIMD(comptime E: type, comptime W: comptime_int) type {
+pub fn FastLanez_ISA_ZIMD(comptime E: type, comptime W: comptime_int) type {
     return struct {
         pub const Lane = @Vector(W / @bitSizeOf(E), E);
 
@@ -185,17 +185,17 @@ pub fn FastLanez_ZIMD(comptime E: type, comptime W: comptime_int) type {
 }
 
 pub fn Delta(comptime E: type) type {
-    const ISA = FastLanez_ZIMD(E, 1024);
-    // const ISA = FastLanez_Scalar(E);
+    const ISA = FastLanez_ISA_ZIMD(E, 1024);
+    // const ISA = FastLanez_ISA_Scalar(E);
 
     return struct {
         const std = @import("std");
         pub const FL = FastLanez(E, ISA);
 
-        pub fn encode(base: *const FL.Base, in: *const FL.Vector, out: *FL.Vector) void {
+        pub fn encode(base: *const [FL.S]E, in: *const FL.Vector, out: *FL.Vector) void {
             var prev: FL.MM1024 = @bitCast(base.*);
             inline for (0..FL.T) |i| {
-                const next: FL.MM1024 = FL.loadT(in, i);
+                const next = FL.loadT(in, i);
                 const result = FL.subtract(next, prev);
                 FL.storeT(out, i, result);
                 prev = next;
@@ -205,7 +205,7 @@ pub fn Delta(comptime E: type) type {
 }
 
 pub fn BitPacking(comptime E: type, comptime P: type) type {
-    const ISA = FastLanez_ZIMD(E, 128);
+    const ISA = FastLanez_ISA_ZIMD(E, 128);
 
     // The packed size
     const W = @bitSizeOf(P);
@@ -252,8 +252,7 @@ pub fn BitPacking(comptime E: type, comptime P: type) type {
 test "fastlanez transpose" {
     const std = @import("std");
     const T = u32;
-    const ISA = FastLanez_ZIMD(T, 256);
-    const FL = FastLanez(T, ISA);
+    const FL = FastLanez(T, FastLanez_ISA_ZIMD(T, 256));
 
     const input: FL.Vector = arange(T, 1024);
     const transposed = FL.transpose(input);
