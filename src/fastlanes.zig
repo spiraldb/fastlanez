@@ -66,12 +66,12 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
             break :blk _offsets;
         };
 
-        pub inline fn load(ptr: *const anyopaque, n: u8) align(64) MM1024 {
+        pub inline fn load(ptr: *const anyopaque, n: u8) MM1024 {
             const regs: [*]const [128]u8 = @ptrCast(ptr);
             return @bitCast(regs[n]);
         }
 
-        pub inline fn loadT(ptr: *const anyopaque, n: usize) align(64) MM1024 {
+        pub inline fn loadT(ptr: *const anyopaque, n: usize) MM1024 {
             return load(ptr, offsets[n]);
         }
 
