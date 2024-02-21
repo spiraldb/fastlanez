@@ -8,7 +8,15 @@
 // inside a single register, we may now have another STORE operation to push
 // all this back into memory.
 
-pub fn FastLanez(comptime E: type, comptime ISA: type) type {
+const isa = @import("isa.zig");
+
+pub const Options = struct {
+    ISA: fn (comptime E: type) type = isa.FastLanez_ISA_ZIMD(1024),
+};
+
+pub fn FastLanez(comptime E: type, comptime options: Options) type {
+    const ISA = options.ISA(E);
+
     // The type of a single lane of the ISA.
     const Lane = ISA.Lane;
     const NLanes = 1024 / @bitSizeOf(Lane);
@@ -48,9 +56,9 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
         /// The number of elements in a single MM1024 register.
         pub const S = 1024 / T;
 
-        const Vector = [1024]E;
+        pub const Vector = [1024]E;
 
-        /// Represents the fastlanes virtual 1024-bit SIMD register.
+        /// Represents the fastlanes virtual 1024bit SIMD register.
         pub const MM1024 = Lanes;
 
         /// Offset required to iterate over 1024 bit vectors according to the unified transpose order.
@@ -135,128 +143,11 @@ pub fn FastLanez(comptime E: type, comptime ISA: type) type {
     };
 }
 
-/// A FastLanez ISA implemented using scalar operations.
-pub fn FastLanez_ISA_Scalar(comptime E: type) type {
-    return struct {
-        pub const Lane = E;
-
-        inline fn subtract(a: Lane, b: Lane) Lane {
-            return a -% b;
-        }
-
-        inline fn or_(a: Lane, b: Lane) Lane {
-            return a | b;
-        }
-
-        inline fn and_lshift(lane: Lane, n: anytype, mask: Lane) Lane {
-            return lane & mask << n;
-        }
-
-        inline fn and_rshift(lane: Lane, n: anytype, mask: Lane) Lane {
-            return lane & (mask << n) >> n;
-        }
-    };
-}
-
-pub fn FastLanez_ISA_ZIMD(comptime E: type, comptime W: comptime_int) type {
-    return struct {
-        pub const Lane = @Vector(W / @bitSizeOf(E), E);
-
-        inline fn subtract(a: Lane, b: Lane) Lane {
-            return a -% b;
-        }
-
-        inline fn or_(a: Lane, b: Lane) Lane {
-            return a | b;
-        }
-
-        inline fn and_lshift(lane: Lane, n: u8, mask: E) Lane {
-            const maskvec: Lane = @splat(mask);
-            const nvec: Lane = @splat(n);
-            return (lane & maskvec) << @intCast(nvec);
-        }
-
-        inline fn and_rshift(lane: Lane, n: u8, mask: E) Lane {
-            const maskvec: Lane = @splat(mask);
-            const nvec: Lane = @splat(n);
-            return (lane & (maskvec << nvec)) >> @intCast(nvec);
-        }
-    };
-}
-
-pub fn Delta(comptime E: type) type {
-    //const ISA = FastLanez_ISA_ZIMD(E, 1024);
-    const ISA = FastLanez_ISA_Scalar(E);
-
-    return struct {
-        const std = @import("std");
-        pub const FL = FastLanez(E, ISA);
-
-        pub fn encode(base: *const [FL.S]E, in: *const FL.Vector, out: *FL.Vector) void {
-            var prev = FL.load(base, 0);
-            inline for (0..FL.T) |i| {
-                const next = FL.loadT(in, i);
-                const result = FL.subtract(next, prev);
-                FL.storeT(out, i, result);
-                prev = next;
-            }
-        }
-    };
-}
-
-pub fn BitPacking(comptime E: type, comptime P: type) type {
-    const ISA = FastLanez_ISA_ZIMD(E, 128);
-
-    // The packed size
-    const W = @bitSizeOf(P);
-    const B = 128 * W;
-
-    return struct {
-        pub const FL = FastLanez(E, ISA);
-        pub const Vector = FL.Vector;
-
-        /// Decode a packed byte stream in to a 1024 element vector.
-        pub fn decode(in: *const [B]u8, out: *FL.Vector) void {
-            // Add so our code more closely matches the psuedo-code
-            var mask: [W + 1]E = undefined;
-            inline for (0..W) |i| {
-                mask[i + 1] = (1 << (i + 1)) - 1;
-            }
-
-            var r0: FL.MM1024 = undefined;
-            var r1: FL.MM1024 = undefined;
-
-            // TODO(ngates): can we just use loadT/storeT always?
-            // Don't think so. Since FL is specialized to E, rather than P.
-            // If each function took a type, then perhaps?
-
-            r0 = FL.load(in, 0);
-            r1 = FL.and_rshift(r0, 0, mask[3]);
-            FL.store(out, 0, r1);
-            r1 = FL.and_rshift(r0, 3, mask[3]);
-            FL.store(out, 1, r1);
-            r1 = FL.and_rshift(r0, 6, mask[2]);
-            r0 = FL.load(in, 1);
-            FL.store(out, 2, FL.or_(r1, FL.and_lshift(r0, 2, mask[1])));
-            r1 = FL.and_rshift(r0, 1, mask[3]);
-            FL.store(out, 3, r1);
-            r1 = FL.and_rshift(r0, 4, mask[3]);
-            FL.store(out, 4, r1);
-            r1 = FL.and_rshift(r0, 7, mask[1]);
-            r0 = FL.load(in, 2);
-            FL.store(out, 5, FL.or_(r1, FL.and_lshift(r0, 1, mask[2])));
-            r1 = FL.and_rshift(r0, 2, mask[3]);
-            FL.store(out, 6, r1);
-            r1 = FL.and_rshift(r0, 5, mask[3]);
-            FL.store(out, 7, r1);
-        }
-    };
-}
-
 test "fastlanez transpose" {
     const std = @import("std");
+    const arange = @import("helper.zig").arange;
     const T = u32;
-    const FL = FastLanez(T, FastLanez_ISA_ZIMD(T, 256));
+    const FL = FastLanez(T, .{});
 
     const input: FL.Vector = arange(T, 1024);
     const transposed = FL.transpose(input);
@@ -269,106 +160,9 @@ test "fastlanez transpose" {
     try std.testing.expectEqual(transposed[1023], 1023);
 }
 
-test "fastlanez delta" {
-    const std = @import("std");
-    const T = u16;
-    const Codec = Delta(T);
-
-    const base = [_]T{0} ** (1024 / @bitSizeOf(T));
-    const input = arange(T, 1024);
-    const tinput = Codec.FL.transpose(input);
-
-    var actual: [1024]T = undefined;
-    Codec.encode(&base, &tinput, &actual);
-
-    actual = Codec.FL.untranspose(actual);
-
-    for (0..1024) |i| {
-        // Since fastlanes processes based on 16 blocks, we expect a zero delta every 1024 / 16 = 64 elements.
-        if (i % @bitSizeOf(T) == 0) {
-            try std.testing.expectEqual(i, actual[i]);
-        } else {
-            try std.testing.expectEqual(1, actual[i]);
-        }
-    }
-}
-
-test "fastlanez bitpack" {
+comptime {
     const std = @import("std");
 
-    const Codec = BitPacking(u8, u3);
-
-    const input: [384]u8 = @bitCast(repeat(u8, 255, 384)); // Setup an input of all "1" bits.
-    var output: [1024]u8 = undefined;
-    Codec.decode(&input, &output);
-
-    try std.testing.expectEqual(output, repeat(u8, 7, 1024));
-}
-
-test "fastlanez delta bench" {
-    const std = @import("std");
-    const builtin = @import("builtin");
-    const dbg = builtin.mode == .Debug;
-
-    const warmup = 0;
-    const iterations = if (dbg) 1_000 else 10_000_000;
-
-    // if (true) return;
-
-    inline for (.{ u16, u32, u64 }) |T| {
-        inline for (.{Delta(T)}) |Codec| {
-            const base = [_]T{0} ** (1024 / @bitSizeOf(T));
-            const input = arange(T, 1024);
-
-            for (0..warmup) |_| {
-                var actual: [1024]T = undefined;
-                Codec.encode(base, input, &actual);
-            }
-
-            var time: i128 = 0;
-            for (0..iterations) |_| {
-                const start = std.time.nanoTimestamp();
-                var actual: [1024]T = undefined;
-                Codec.encode(&base, &input, &actual);
-                std.mem.doNotOptimizeAway(actual);
-                // Codec.encode(base, input, &actual);
-                const stop = std.time.nanoTimestamp();
-                time += stop - start;
-            }
-
-            const clock_freq = 3.48; // GHz
-
-            const total_nanos = @as(f64, @floatFromInt(time));
-            const total_ms = total_nanos / 1_000_000;
-            const total_cycles = total_nanos * clock_freq;
-
-            const total_elems = iterations * 1024;
-            const elems_per_cycle = total_elems / total_cycles;
-            const cycles_per_elem = total_cycles / total_elems;
-
-            std.debug.print("Completed {} iterations of {}\n", .{ iterations, Codec });
-            std.debug.print("\t{d:.2} ms total.\n", .{total_ms});
-            std.debug.print("\t{d:.1} elems / cycle\n", .{elems_per_cycle});
-            std.debug.print("\t{d:.1} cycles / elem\n", .{cycles_per_elem});
-            std.debug.print("\t{d:.2} billion elems / second\n", .{total_elems / total_nanos});
-            std.debug.print("\n", .{});
-        }
-    }
-}
-
-fn repeat(comptime T: type, comptime v: T, comptime n: comptime_int) [n]T {
-    var result: [n]T = undefined;
-    for (0..n) |i| {
-        result[i] = @intCast(v);
-    }
-    return result;
-}
-
-fn arange(comptime T: type, comptime n: comptime_int) [n]T {
-    const std = @import("std");
-    var result: [n]T = undefined;
-    for (0..n) |i| {
-        result[i] = @intCast(i % std.math.maxInt(T));
-    }
-    return result;
+    std.testing.refAllDecls(@import("bitpacking.zig"));
+    std.testing.refAllDecls(@import("delta.zig"));
 }
