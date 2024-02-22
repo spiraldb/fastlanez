@@ -31,6 +31,10 @@ pub fn FastLanez_ISA_ZIMD(comptime vectorWidth: comptime_int) fn (E: type) type 
                     return a -% b;
                 }
 
+                pub inline fn and_(a: Lane, b: Lane) Lane {
+                    return a & b;
+                }
+
                 pub inline fn or_(a: Lane, b: Lane) Lane {
                     return a | b;
                 }

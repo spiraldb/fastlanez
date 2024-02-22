@@ -115,6 +115,14 @@ pub fn FastLanez(comptime E: type, comptime options: Options) type {
             return @bitCast(result);
         }
 
+        pub inline fn and_(a: MM1024, b: MM1024) MM1024 {
+            var result: Lanes = undefined;
+            inline for (@as(Lanes, a), @as(Lanes, b), 0..) |lane_a, lane_b, i| {
+                result[i] = ISA.and_(lane_a, lane_b);
+            }
+            return @bitCast(result);
+        }
+
         pub inline fn or_(a: MM1024, b: MM1024) MM1024 {
             var result: Lanes = undefined;
             inline for (@as(Lanes, a), @as(Lanes, b), 0..) |lane_a, lane_b, i| {
@@ -163,6 +171,7 @@ test "fastlanez transpose" {
 comptime {
     const std = @import("std");
 
+    std.testing.refAllDecls(@import("bitpacking_demo.zig"));
     std.testing.refAllDecls(@import("bitpacking.zig"));
     std.testing.refAllDecls(@import("delta.zig"));
 }
