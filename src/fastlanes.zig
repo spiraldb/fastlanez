@@ -106,6 +106,15 @@ pub fn FastLanez(comptime E: type, comptime options: Options) type {
             return @shuffle(E, @as(V, vec), @as(V, vec), untranspose_mask);
         }
 
+        pub inline fn add(a: MM1024, b: MM1024) MM1024 {
+            @setEvalBranchQuota(4096);
+            var result: Lanes = undefined;
+            inline for (@as(Lanes, a), @as(Lanes, b), 0..) |lane_a, lane_b, i| {
+                result[i] = ISA.add(lane_a, lane_b);
+            }
+            return @bitCast(result);
+        }
+
         pub inline fn subtract(a: MM1024, b: MM1024) MM1024 {
             @setEvalBranchQuota(4096);
             var result: Lanes = undefined;

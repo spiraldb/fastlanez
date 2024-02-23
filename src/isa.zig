@@ -3,6 +3,10 @@ pub fn FastLanez_ISA_Scalar(comptime E: type) type {
     return struct {
         pub const Lane = E;
 
+        pub inline fn add(a: Lane, b: Lane) Lane {
+            return a + b;
+        }
+
         pub inline fn subtract(a: Lane, b: Lane) Lane {
             return a -% b;
         }
@@ -26,6 +30,10 @@ pub fn FastLanez_ISA_ZIMD(comptime vectorWidth: comptime_int) fn (E: type) type 
         pub fn create(comptime E: type) type {
             return struct {
                 pub const Lane = @Vector(vectorWidth / @bitSizeOf(E), E);
+
+                pub inline fn add(a: Lane, b: Lane) Lane {
+                    return a + b;
+                }
 
                 pub inline fn subtract(a: Lane, b: Lane) Lane {
                     return a -% b;

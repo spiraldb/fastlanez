@@ -14,6 +14,16 @@ pub fn Delta(comptime E: type) type {
                 prev = next;
             }
         }
+
+        pub fn decode(base: *const [FL.S]E, in: *const FL.Vector, out: *FL.Vector) void {
+            var prev = FL.load(base, 0);
+            inline for (0..FL.T) |i| {
+                const delta = FL.loadT(in, i);
+                const result = FL.add(prev, delta);
+                FL.storeT(out, i, result);
+                prev = result;
+            }
+        }
     };
 }
 
@@ -55,6 +65,24 @@ test "fastlanez bench delta encode" {
             pub fn run() void {
                 var output: [1024]T = undefined;
                 Delta(T).encode(&base, &input, &output);
+                std.mem.doNotOptimizeAway(output);
+            }
+        });
+    }
+}
+
+test "fastlanez bench delta decode" {
+    const std = @import("std");
+    const Bench = @import("bench.zig").Bench;
+
+    inline for (.{ u8, u16, u32, u64 }) |T| {
+        try Bench("delta decode " ++ @typeName(T), .{}).bench(struct {
+            const base = [_]T{0} ** (1024 / @bitSizeOf(T));
+            const input: [1024]T = .{1} ** 1024;
+
+            pub fn run() void {
+                var output: [1024]T = undefined;
+                Delta(T).decode(&base, &input, &output);
                 std.mem.doNotOptimizeAway(output);
             }
         });

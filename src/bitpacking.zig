@@ -6,9 +6,19 @@ pub fn BitPacking(comptime E: type, comptime W: comptime_int) type {
     return struct {
         pub const FL = fl.FastLanez(E, .{});
         pub const Vector = FL.Vector;
+        pub const Kernel = fn (FL.MM1024) FL.MM1024;
+
+        pub fn pack(in: *const FL.Vector, out: *[128 * W]u8) void {
+            const Closure = struct {
+                fn noop(vec: FL.MM1024) FL.MM1024 {
+                    return vec;
+                }
+            };
+            return fused_pack(in, out, Closure.noop);
+        }
 
         // Pack a 1024 element vector of E into a byte stream of W-bit elements.
-        pub fn pack(in: *const FL.Vector, out: *[128 * W]u8) void {
+        pub fn fused_pack(in: *const FL.Vector, out: *[128 * W]u8, kernel: Kernel) void {
             // Which 1024-bit output register we're writing to
             comptime var out_idx = 0;
 
@@ -18,8 +28,8 @@ pub fn BitPacking(comptime E: type, comptime W: comptime_int) type {
             var tmp: FL.MM1024 = @bitCast([_]u8{0} ** 128);
 
             inline for (0..T) |t| {
-                // Grab the next input vector
-                const src = FL.load(in, t);
+                // Grab the next input vector and apply the kernel
+                const src: FL.MM1024 = kernel(FL.loadT(in, t));
 
                 // If we didn't take all W bits last time, then we load the remainder
                 if (mask_bits < W) {
@@ -102,7 +112,7 @@ test "fastlanez bitpack pack bench" {
     const BP = BitPacking(u8, 3);
     const ints: [1024]u8 = .{2} ** 1024;
 
-    try Bench("pack", .{}).bench(struct {
+    try Bench("pack u8 -> u3", .{}).bench(struct {
         pub fn run() void {
             var packed_ints: [384]u8 = undefined;
             BP.pack(&ints, &packed_ints);
@@ -120,7 +130,7 @@ test "fastlanez bitpack unpack bench" {
     // Decimal 2 repeated as 3-bit integers in blocks of 1024 bits.
     const packed_ints: [384]u8 = .{0b10010010} ** 128 ++ .{0b00100100} ** 128 ++ .{0b01001001} ** 128;
 
-    try Bench("unpack", .{}).bench(struct {
+    try Bench("unpack u8 <- u3", .{}).bench(struct {
         pub fn run() void {
             var unpacked_ints: [1024]u8 = undefined;
             BP.unpack(&packed_ints, &unpacked_ints);
