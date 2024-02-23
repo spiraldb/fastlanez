@@ -5,26 +5,11 @@
 
     // See `zig fetch --save <url>` for a command-line interface for adding dependencies.
     .dependencies = .{
-        // .zig_cycleclock = .{
-        //     .url = "https://github.com/fulcrum-so/zig-cycleclock/archive/refs/tags/0.0.1.tar.gz",
-        //     .hash = "12207057739ae23eb75b70f0d7e83907a1cc8501fdd3caf850b02c35a45eecc51f77",
-        // },
         .@"zig-cycleclock" = .{
             .url = "https://github.com/fulcrum-so/zig-cycleclock/archive/refs/tags/0.0.2.tar.gz",
             .hash = "12207d4cc840f5af45027833138f0e1f509ae55266e3a2dfc5a9140e70a998d42b0a",
         },
     },
-    .paths = .{
-        // This makes *all* files, recursively, included in this package. It is generally
-        // better to explicitly list the files and directories instead, to insure that
-        // fetching from tarballs, file system paths, and version control all result
-        // in the same contents hash.
-        "",
-        // For example...
-        //"build.zig",
-        //"build.zig.zon",
-        //"src",
-        //"LICENSE",
-        //"README.md",
-    },
+
+    .paths = .{""},
 }
