@@ -3,16 +3,6 @@ const fl = @import("fastlanes.zig");
 pub fn BitPacking(comptime E: type, comptime W: comptime_int) type {
     const T = @bitSizeOf(E); // The element size
 
-    // Create masks for each bit width up to W. mask[2] will mask the right-most 2-bits, and so on.
-    // TODO(ngates): turn into a comptime function
-    const mask: [W + 1]E = blk: {
-        var mask_: [W + 1]E = undefined;
-        inline for (0..W) |i| {
-            mask_[i + 1] = (1 << (i + 1)) - 1;
-        }
-        break :blk mask_;
-    };
-
     return struct {
         pub const FL = fl.FastLanez(E, .{});
         pub const Vector = FL.Vector;
@@ -33,22 +23,22 @@ pub fn BitPacking(comptime E: type, comptime W: comptime_int) type {
 
                 // If we didn't take all W bits last time, then we load the remainder
                 if (mask_bits < W) {
-                    tmp = FL.or_(tmp, FL.and_rshift(src, mask_bits, mask[shift_bits]));
+                    tmp = FL.or_(tmp, FL.and_rshift(src, mask_bits, mask(shift_bits)));
                 }
 
-                // Either we can take W bits, or we take less than W bits
-                // and we have to fill it up in the next load.
+                // Update the number of mask bits
                 mask_bits = @min(T - shift_bits, W);
 
-                // Take the first W bits.
-                tmp = FL.or_(tmp, FL.and_lshift(src, shift_bits, mask[mask_bits]));
+                // Pull the masked bits into the tmp register
+                tmp = FL.or_(tmp, FL.and_lshift(src, shift_bits, mask(mask_bits)));
                 shift_bits += W;
 
                 if (shift_bits >= T) {
+                    // If we have a full 1024 bits, then store it and reset the tmp register
                     FL.store(out, out_idx, tmp);
+                    tmp = @bitCast([_]u8{0} ** 128);
                     out_idx += 1;
                     shift_bits -= T;
-                    tmp = @bitCast([_]u8{0} ** 128);
                 }
             }
         }
@@ -62,13 +52,13 @@ pub fn BitPacking(comptime E: type, comptime W: comptime_int) type {
             inline for (0..T) |t| {
                 const mask_bits = @min(T - shift_bits, W);
 
-                var sink = FL.and_rshift(tmp, shift_bits, mask[mask_bits]);
+                var sink = FL.and_rshift(tmp, shift_bits, mask(mask_bits));
 
                 if (mask_bits != W) {
                     tmp = FL.load(in, in_idx);
                     in_idx += 1;
 
-                    sink = FL.or_(sink, FL.and_lshift(tmp, mask_bits, mask[W - mask_bits]));
+                    sink = FL.or_(sink, FL.and_lshift(tmp, mask_bits, mask(W - mask_bits)));
 
                     shift_bits = W - mask_bits;
                 } else {
@@ -78,23 +68,74 @@ pub fn BitPacking(comptime E: type, comptime W: comptime_int) type {
                 FL.store(out, t, sink);
             }
         }
+
+        // Create a mask of the first `bits` bits.
+        fn mask(bits: comptime_int) E {
+            return (1 << bits) - 1;
+        }
     };
 }
 
 test "fastlanez bitpack" {
     const std = @import("std");
-    const repeat = @import("helper.zig").repeat;
-
     const BP = BitPacking(u8, 3);
 
-    const ints: [1024]u8 = repeat(u8, 2, 1024);
+    const ints: [1024]u8 = .{2} ** 1024;
     var packed_ints: [384]u8 = undefined;
     BP.pack(&ints, &packed_ints);
-    std.debug.print("PACKED {any}\n", .{packed_ints});
-    try std.testing.expectEqual(([_]u8{92} ** 128) ++ ([_]u8{92} ** 128) ++ ([_]u8{92} ** 128), packed_ints);
+
+    // Decimal 2 repeated as 3-bit integers in blocks of 1024 bits.
+    try std.testing.expectEqual(
+        .{0b10010010} ** 128 ++ .{0b00100100} ** 128 ++ .{0b01001001} ** 128,
+        packed_ints,
+    );
 
     var output: [1024]u8 = undefined;
     BP.unpack(&packed_ints, &output);
+    try std.testing.expectEqual(.{2} ** 1024, output);
+}
 
-    try std.testing.expectEqual(repeat(u8, 2, 1024), output);
+test "fastlanez bitpack pack bench" {
+    const std = @import("std");
+    const builtin = @import("builtin");
+    const dbg = builtin.mode == .Debug;
+
+    const warmup = 0;
+    const iterations = if (dbg) 1_000 else 10_000_000;
+
+    const BP = BitPacking(u8, 3);
+    const ints: [1024]u8 = .{2} ** 1024;
+
+    for (0..warmup) |_| {
+        var packed_ints: [384]u8 = undefined;
+        BP.pack(&ints, &packed_ints);
+        std.mem.doNotOptimizeAway(packed_ints);
+    }
+
+    var time: i128 = 0;
+    for (0..iterations) |_| {
+        const start = std.time.nanoTimestamp();
+        var packed_ints: [384]u8 = undefined;
+        BP.pack(&ints, &packed_ints);
+        std.mem.doNotOptimizeAway(packed_ints);
+        const stop = std.time.nanoTimestamp();
+        time += stop - start;
+    }
+
+    const clock_freq = 3.48; // GHz
+
+    const total_nanos = @as(f64, @floatFromInt(time));
+    const total_ms = total_nanos / 1_000_000;
+    const total_cycles = total_nanos * clock_freq;
+
+    const total_elems = iterations * 1024;
+    const elems_per_cycle = total_elems / total_cycles;
+    const cycles_per_elem = total_cycles / total_elems;
+
+    std.debug.print("Completed {} iterations of {}\n", .{ iterations, BP });
+    std.debug.print("\t{d:.2} ms total.\n", .{total_ms});
+    std.debug.print("\t{d:.1} elems / cycle\n", .{elems_per_cycle});
+    std.debug.print("\t{d:.1} cycles / elem\n", .{cycles_per_elem});
+    std.debug.print("\t{d:.2} billion elems / second\n", .{total_elems / total_nanos});
+    std.debug.print("\n", .{});
 }
