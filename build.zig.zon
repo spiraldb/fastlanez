@@ -10,7 +10,7 @@
         //     .hash = "12207057739ae23eb75b70f0d7e83907a1cc8501fdd3caf850b02c35a45eecc51f77",
         // },
         .@"zig-cycleclock" = .{
-            .url = "../zig-cycleclock",
+            .url = "https://github.com/fulcrum-so/zig-cycleclock/archive/refs/tags/0.0.2.tar.gz",
             .hash = "12207d4cc840f5af45027833138f0e1f509ae55266e3a2dfc5a9140e70a998d42b0a",
         },
     },
