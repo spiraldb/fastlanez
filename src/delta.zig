@@ -43,53 +43,20 @@ test "fastlanez delta" {
     }
 }
 
-test "fastlanez delta bench" {
+test "fastlanez bench delta encode" {
     const std = @import("std");
-    const arange = @import("helper.zig").arange;
+    const Bench = @import("bench.zig").Bench;
 
-    const builtin = @import("builtin");
-    const dbg = builtin.mode == .Debug;
-
-    const warmup = 0;
-    const iterations = if (dbg) 1_000 else 10_000_000;
-
-    inline for (.{ u16, u32, u64 }) |T| {
-        inline for (.{Delta(T)}) |Codec| {
+    inline for (.{ u8, u16, u32, u64 }) |T| {
+        try Bench("delta encode " ++ @typeName(T), .{}).bench(struct {
             const base = [_]T{0} ** (1024 / @bitSizeOf(T));
-            const input = arange(T, 1024);
+            const input: [1024]T = .{1} ** 1024;
 
-            for (0..warmup) |_| {
-                var actual: [1024]T = undefined;
-                Codec.encode(base, input, &actual);
+            pub fn run() void {
+                var output: [1024]T = undefined;
+                Delta(T).encode(&base, &input, &output);
+                std.mem.doNotOptimizeAway(output);
             }
-
-            var time: i128 = 0;
-            for (0..iterations) |_| {
-                const start = std.time.nanoTimestamp();
-                var actual: [1024]T = undefined;
-                Codec.encode(&base, &input, &actual);
-                std.mem.doNotOptimizeAway(actual);
-                // Codec.encode(base, input, &actual);
-                const stop = std.time.nanoTimestamp();
-                time += stop - start;
-            }
-
-            const clock_freq = 3.48; // GHz
-
-            const total_nanos = @as(f64, @floatFromInt(time));
-            const total_ms = total_nanos / 1_000_000;
-            const total_cycles = total_nanos * clock_freq;
-
-            const total_elems = iterations * 1024;
-            const elems_per_cycle = total_elems / total_cycles;
-            const cycles_per_elem = total_cycles / total_elems;
-
-            std.debug.print("Completed {} iterations of {}\n", .{ iterations, Codec });
-            std.debug.print("\t{d:.2} ms total.\n", .{total_ms});
-            std.debug.print("\t{d:.1} elems / cycle\n", .{elems_per_cycle});
-            std.debug.print("\t{d:.1} cycles / elem\n", .{cycles_per_elem});
-            std.debug.print("\t{d:.2} billion elems / second\n", .{total_elems / total_nanos});
-            std.debug.print("\n", .{});
-        }
+        });
     }
 }

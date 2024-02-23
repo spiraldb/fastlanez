@@ -97,94 +97,34 @@ test "fastlanez bitpack" {
 
 test "fastlanez bitpack pack bench" {
     const std = @import("std");
-    const builtin = @import("builtin");
-    const dbg = builtin.mode == .Debug;
-
-    const warmup = 0;
-    const iterations = if (dbg) 1_000 else 10_000_000;
+    const Bench = @import("bench.zig").Bench;
 
     const BP = BitPacking(u8, 3);
     const ints: [1024]u8 = .{2} ** 1024;
 
-    for (0..warmup) |_| {
-        var packed_ints: [384]u8 = undefined;
-        BP.pack(&ints, &packed_ints);
-        std.mem.doNotOptimizeAway(packed_ints);
-    }
-
-    var time: i128 = 0;
-    for (0..iterations) |_| {
-        const start = std.time.nanoTimestamp();
-        var packed_ints: [384]u8 = undefined;
-        BP.pack(&ints, &packed_ints);
-        std.mem.doNotOptimizeAway(packed_ints);
-        const stop = std.time.nanoTimestamp();
-        time += stop - start;
-    }
-
-    const clock_freq = 3.48; // GHz
-
-    const total_nanos = @as(f64, @floatFromInt(time));
-    const total_ms = total_nanos / 1_000_000;
-    const total_cycles = total_nanos * clock_freq;
-
-    const total_elems = iterations * 1024;
-    const elems_per_cycle = total_elems / total_cycles;
-    const cycles_per_elem = total_cycles / total_elems;
-
-    std.debug.print("Completed {} iterations of {}\n", .{ iterations, BP });
-    std.debug.print("\t{d:.2} ms total.\n", .{total_ms});
-    std.debug.print("\t{d:.1} elems / cycle\n", .{elems_per_cycle});
-    std.debug.print("\t{d:.1} cycles / elem\n", .{cycles_per_elem});
-    std.debug.print("\t{d:.2} billion elems / second\n", .{total_elems / total_nanos});
-    std.debug.print("\n", .{});
+    try Bench("pack", .{}).bench(struct {
+        pub fn run() void {
+            var packed_ints: [384]u8 = undefined;
+            BP.pack(&ints, &packed_ints);
+            std.mem.doNotOptimizeAway(packed_ints);
+        }
+    });
 }
 
 test "fastlanez bitpack unpack bench" {
     const std = @import("std");
-    const builtin = @import("builtin");
-    const dbg = builtin.mode == .Debug;
-
-    const warmup = 0;
-    const iterations = if (dbg) 1_000 else 10_000_000;
+    const Bench = @import("bench.zig").Bench;
 
     const BP = BitPacking(u8, 3);
 
     // Decimal 2 repeated as 3-bit integers in blocks of 1024 bits.
     const packed_ints: [384]u8 = .{0b10010010} ** 128 ++ .{0b00100100} ** 128 ++ .{0b01001001} ** 128;
 
-    for (0..warmup) |_| {
-        var unpacked_ints: [1024]u8 = undefined;
-        BP.unpack(&packed_ints, &unpacked_ints);
-        std.mem.doNotOptimizeAway(unpacked_ints);
-    }
-
-    var time: i128 = 0;
-    for (0..iterations) |_| {
-        const start = std.time.nanoTimestamp();
-
-        var unpacked_ints: [1024]u8 = undefined;
-        BP.unpack(&packed_ints, &unpacked_ints);
-        std.mem.doNotOptimizeAway(unpacked_ints);
-
-        const stop = std.time.nanoTimestamp();
-        time += stop - start;
-    }
-
-    const clock_freq = 3.48; // GHz
-
-    const total_nanos = @as(f64, @floatFromInt(time));
-    const total_ms = total_nanos / 1_000_000;
-    const total_cycles = total_nanos * clock_freq;
-
-    const total_elems = iterations * 1024;
-    const elems_per_cycle = total_elems / total_cycles;
-    const cycles_per_elem = total_cycles / total_elems;
-
-    std.debug.print("Completed {} iterations of {}\n", .{ iterations, BP });
-    std.debug.print("\t{d:.2} ms total.\n", .{total_ms});
-    std.debug.print("\t{d:.1} elems / cycle\n", .{elems_per_cycle});
-    std.debug.print("\t{d:.1} cycles / elem\n", .{cycles_per_elem});
-    std.debug.print("\t{d:.2} billion elems / second\n", .{total_elems / total_nanos});
-    std.debug.print("\n", .{});
+    try Bench("unpack", .{}).bench(struct {
+        pub fn run() void {
+            var unpacked_ints: [1024]u8 = undefined;
+            BP.unpack(&packed_ints, &unpacked_ints);
+            std.mem.doNotOptimizeAway(unpacked_ints);
+        }
+    });
 }
