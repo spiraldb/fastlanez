@@ -11,8 +11,8 @@
 const isa = @import("isa.zig");
 
 pub const Options = struct {
-    ISA: fn (comptime E: type) type = isa.FastLanez_ISA_ZIMD(128),
-    // ISA: fn (comptime E: type) type = isa.FastLanez_ISA_Scalar,
+    //ISA: fn (comptime E: type) type = isa.FastLanez_ISA_ZIMD(128),
+    ISA: fn (comptime E: type) type = isa.FastLanez_ISA_Scalar,
 };
 
 pub fn FastLanez(comptime Element: type, comptime options: Options) type {
@@ -71,7 +71,7 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
 
                         if (n % 8 == 0) {
                             // Start a new loop;
-                            prev = @bitCast(base[offset / 8 ..][0..M].*);
+                            prev = load_mm(base, offset / N);
                         }
 
                         const next: MM = load_mm(in, offset / M);
@@ -90,10 +90,9 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
                         // Loop over each lane.
                         const offset = untranspose_mask[n];
 
-                        // TODO(ngates): which of these matters?
-                        if (offset % 8 == 0) {
+                        if (n % 8 == 0) {
                             // Start a new loop;
-                            prev = load_mm(base, offset / 128);
+                            prev = load_mm(base, offset / N);
                         }
 
                         const next: MM = load_mm(in, offset / M);
