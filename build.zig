@@ -27,18 +27,4 @@ pub fn build(b: *std.Build) void {
     run_unit_tests.step.dependOn(b.getInstallStep());
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
-
-    // Benchmarking
-    const bench = b.addExecutable(.{
-        .name = "fastlanez-bench",
-        .root_source_file = .{ .path = "src/bench.zig" },
-        .target = target,
-        .optimize = optimize,
-    });
-    bench.root_module.import_table = module.import_table;
-    b.installArtifact(bench);
-    const bench_cmd = b.addRunArtifact(bench);
-    bench_cmd.step.dependOn(b.getInstallStep());
-    const bench_step = b.step("bench", "Run the fastlanez benchmarks");
-    bench_step.dependOn(&bench_cmd.step);
 }

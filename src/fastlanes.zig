@@ -11,20 +11,27 @@
 const isa = @import("isa.zig");
 
 pub const Options = struct {
-    ISA: fn (comptime E: type) type = isa.FastLanez_ISA_ZIMD(1024),
+    ISA: fn (comptime E: type) type = isa.FastLanez_ISA_ZIMD(128),
     // ISA: fn (comptime E: type) type = isa.FastLanez_ISA_Scalar,
 };
 
 pub fn FastLanez(comptime Element: type, comptime options: Options) type {
     const ISA = options.ISA(Element);
 
-    // The type of a single lane of the ISA.
-    const Lane = ISA.Lane;
-    const NLanes = 1024 / @bitSizeOf(Lane);
-
-    const Lanes = [NLanes]ISA.Lane;
-
     return struct {
+        /// The variable width SIMD register as supported by the ISA.
+        pub const MM = ISA.MM;
+        /// The number of elements in an MM register.
+        const M = @bitSizeOf(MM) / T;
+
+        pub const Vec = [1024 / NLanes]E;
+
+        // The type of a single lane of the ISA.
+        pub const Lane = MM;
+        pub const NLanes = 1024 / @bitSizeOf(MM);
+        pub const Lanes = [NLanes]ISA.MM;
+        pub const N = 1024 * T / @bitSizeOf(MM);
+
         /// The type of the element.
         pub const E = Element;
         /// The bit size of the element type.
@@ -35,7 +42,7 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
         /// A vector of 1024 elements.
         pub const Vector = [1024]E;
 
-        /// Represents the fastlanes virtual 1024-bit SIMD word.
+        /// Represents the fastlanes virtual 1024bit SIMD word.
         pub const MM1024 = Lanes;
 
         /// Offset required to iterate over 1024 bit vectors according to the unified transpose order.
@@ -51,24 +58,50 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
             break :blk _offsets;
         };
 
-        /// Load the logical nth 1024-bit word from the input buffer. Respecting the unified transpose order.
+        pub fn pairwise(comptime Codec: type) type {
+            return struct {
+                pub fn encode(base: *const [S]E, in: *const Vector, out: *Vector) void {
+                    const base_mm: *const [N / 8]MM = @ptrCast(base);
+                    // const in_mm: *const [N]MM = @ptrCast(in);
+                    // const out_mm: *[N]MM = @ptrCast(out);
+
+                    var prev: MM = undefined;
+
+                    inline for (0..N) |n| {
+                        // Loop over each lane.
+                        const offset = untranspose_mask[n];
+
+                        if (n % 8 == 0) {
+                            // Start a new loop;
+                            prev = @bitCast(base_mm[offset / 8 / (@bitSizeOf(MM) / T) ..].*);
+                        }
+
+                        const next: MM = @bitCast(in[offset..][0..M].*);
+                        out[offset..][0..M].* = Codec.encode(prev, next);
+                        prev = next;
+                    }
+                }
+            };
+        }
+
+        /// Load the logical nth 1024bit word from the input buffer. Respecting the unified transpose order.
         pub inline fn load(ptr: anytype, n: usize) MM1024 {
             return load_raw(ptr, offsets[n]);
         }
 
-        /// Load the physical nth 1024-bit word from the input buffer.
+        /// Load the physical nth 1024bit word from the input buffer.
         pub inline fn load_raw(ptr: anytype, n: u8) MM1024 {
             const Array = @typeInfo(@TypeOf(ptr)).Pointer.child;
             const words: *const [@sizeOf(Array) / 128][128]u8 = @ptrCast(ptr);
             return @bitCast(words[n]);
         }
 
-        /// Store the logical nth 1024-bit word into the output buffer. Respecting the unified transpose order.
+        /// Store the logical nth 1024bit word into the output buffer. Respecting the unified transpose order.
         pub inline fn store(ptr: anytype, n: usize, vec: MM1024) void {
             store_raw(ptr, offsets[n], vec);
         }
 
-        /// Store the physical nth 1024-bit word into the output buffer.
+        /// Store the physical nth 1024bit word into the output buffer.
         pub inline fn store_raw(ptr: anytype, n: usize, word: MM1024) void {
             const Array = @typeInfo(@TypeOf(ptr)).Pointer.child;
             const words: *[@sizeOf(Array) / 128][128]u8 = @ptrCast(ptr);
@@ -92,7 +125,7 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
             return [128 * Width]u8;
         }
 
-        /// A struct for bit-packing into an output buffer.
+        /// A struct for bitpacking into an output buffer.
         pub fn BitPacker(comptime Width: comptime_int) type {
             return struct {
                 const Self = @This();
@@ -136,7 +169,7 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
                         store_raw(out, self.out_idx, tmp);
                         tmp = @bitCast([_]u8{0} ** 128);
                         self.out_idx += 1;
-                        self.shift_bits -= T;
+                        self.shift_bits = T;
                     }
 
                     return tmp;
@@ -297,7 +330,7 @@ test "fastlanez transpose" {
 comptime {
     const std = @import("std");
 
-    std.testing.refAllDecls(@import("bitpacking_demo.zig"));
-    std.testing.refAllDecls(@import("bitpacking.zig"));
+    // std.testing.refAllDecls(@import("bitpacking_demo.zig"));
+    // std.testing.refAllDecls(@import("bitpacking.zig"));
     std.testing.refAllDecls(@import("delta.zig"));
 }
