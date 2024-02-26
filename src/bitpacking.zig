@@ -1,5 +1,61 @@
 const fl = @import("fastlanes.zig");
 
+/// A struct for bit-packing T MM1024 words into W ouput words.
+pub fn BitPacker(comptime FL: type, comptime Width: comptime_int) type {
+    return struct {
+        const Self = @This();
+
+        /// The number of times store has been called. The position in the input vector, so to speak.
+        t: comptime_int = 0,
+        /// The position in the output that we're writing to. Will finish equal to Width.
+        out_idx: comptime_int = 0,
+
+        shift_bits: comptime_int = 0,
+        mask_bits: comptime_int = Width,
+
+        /// Invoke to store the next vector.
+        pub inline fn pack(comptime self: *Self, out: *FL.PackedBytes(Width), word: FL.MM1024, state: FL.MM1024) FL.MM1024 {
+            if (self.t > FL.T) {
+                @compileError("Store called too many times");
+            }
+
+            var tmp: FL.MM1024 = undefined;
+            if (self.t == 0) {
+                tmp = @bitCast([_]u8{0} ** 128);
+            } else {
+                tmp = state;
+            }
+
+            // If we didn't take all W bits last time, then we load the remainder
+            if (self.mask_bits < Width) {
+                tmp = FL.or_(tmp, FL.and_rshift(word, self.mask_bits, bitmask(self.shift_bits)));
+            }
+
+            // Update the number of mask bits
+            self.mask_bits = @min(FL.T - self.shift_bits, Width);
+
+            // Pull the masked bits into the tmp register
+            tmp = FL.or_(tmp, FL.and_lshift(word, self.shift_bits, bitmask(self.mask_bits)));
+            self.shift_bits += Width;
+
+            if (self.shift_bits >= FL.T) {
+                // If we have a full 1024 bits, then store it and reset the tmp register
+                FL.store(out, self.out_idx, tmp);
+                tmp = @bitCast([_]u8{0} ** 128);
+                self.out_idx += 1;
+                self.shift_bits -= FL.T;
+            }
+
+            return tmp;
+        }
+
+        // Create a mask of the first `bits` bits.
+        inline fn bitmask(comptime bits: comptime_int) FL.E {
+            return (1 << bits) - 1;
+        }
+    };
+}
+
 pub fn BitPacking(comptime E: type, comptime W: comptime_int) type {
     const T = @bitSizeOf(E); // The element size
 
@@ -8,17 +64,8 @@ pub fn BitPacking(comptime E: type, comptime W: comptime_int) type {
         pub const Vector = FL.Vector;
         pub const Kernel = fn (FL.MM1024) FL.MM1024;
 
-        pub fn pack(in: *const FL.Vector, out: *[128 * W]u8) void {
-            const Closure = struct {
-                fn noop(vec: FL.MM1024) FL.MM1024 {
-                    return vec;
-                }
-            };
-            return fused_pack(in, out, Closure.noop);
-        }
-
         // Pack a 1024 element vector of E into a byte stream of W-bit elements.
-        pub fn fused_pack(in: *const FL.Vector, out: *[128 * W]u8, kernel: Kernel) void {
+        pub fn pack(in: *const FL.Vector, out: *[128 * W]u8) void {
             // Which 1024-bit output register we're writing to
             comptime var out_idx = 0;
 
@@ -29,7 +76,7 @@ pub fn BitPacking(comptime E: type, comptime W: comptime_int) type {
 
             inline for (0..T) |t| {
                 // Grab the next input vector and apply the kernel
-                const src: FL.MM1024 = kernel(FL.loadT(in, t));
+                const src: FL.MM1024 = FL.load(in, t);
 
                 // If we didn't take all W bits last time, then we load the remainder
                 if (mask_bits < W) {
@@ -113,7 +160,7 @@ test "fastlanez bitpack pack bench" {
     const ints: [1024]u8 = .{2} ** 1024;
 
     try Bench("pack u8 -> u3", .{}).bench(struct {
-        pub fn run() void {
+        pub fn run(_: @This()) void {
             var packed_ints: [384]u8 = undefined;
             BP.pack(&ints, &packed_ints);
             std.mem.doNotOptimizeAway(packed_ints);
@@ -131,7 +178,7 @@ test "fastlanez bitpack unpack bench" {
     const packed_ints: [384]u8 = .{0b10010010} ** 128 ++ .{0b00100100} ** 128 ++ .{0b01001001} ** 128;
 
     try Bench("unpack u8 <- u3", .{}).bench(struct {
-        pub fn run() void {
+        pub fn run(_: @This()) void {
             var unpacked_ints: [1024]u8 = undefined;
             BP.unpack(&packed_ints, &unpacked_ints);
             std.mem.doNotOptimizeAway(unpacked_ints);

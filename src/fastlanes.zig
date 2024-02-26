@@ -14,8 +14,8 @@ pub const Options = struct {
     ISA: fn (comptime E: type) type = isa.FastLanez_ISA_ZIMD(1024),
 };
 
-pub fn FastLanez(comptime E: type, comptime options: Options) type {
-    const ISA = options.ISA(E);
+pub fn FastLanez(comptime Element: type, comptime options: Options) type {
+    const ISA = options.ISA(Element);
 
     // The type of a single lane of the ISA.
     const Lane = ISA.Lane;
@@ -51,14 +51,17 @@ pub fn FastLanez(comptime E: type, comptime options: Options) type {
     };
 
     return struct {
+        /// The type of the element.
+        pub const E = Element;
         /// The bit size of the element type.
         pub const T = @bitSizeOf(E);
-        /// The number of elements in a single MM1024 register.
+        /// The number of elements in a single MM1024 word.
         pub const S = 1024 / T;
 
+        /// A vector of 1024 elements.
         pub const Vector = [1024]E;
 
-        /// Represents the fastlanes virtual 1024bit SIMD register.
+        /// Represents the fastlanes virtual 1024-bit SIMD word.
         pub const MM1024 = Lanes;
 
         /// Offset required to iterate over 1024 bit vectors according to the unified transpose order.
@@ -74,36 +77,136 @@ pub fn FastLanez(comptime E: type, comptime options: Options) type {
             break :blk _offsets;
         };
 
-        pub inline fn load(ptr: *const anyopaque, n: u8) MM1024 {
+        /// Load the logical nth 1024-bit word from the input buffer. Respecting the unified transpose order.
+        pub inline fn load(ptr: *const anyopaque, n: usize) MM1024 {
+            return load_raw(ptr, offsets[n]);
+        }
+
+        /// Load the physical nth 1024-bit word from the input buffer.
+        inline fn load_raw(ptr: *const anyopaque, n: u8) MM1024 {
             const regs: [*]const [128]u8 = @ptrCast(ptr);
             return @bitCast(regs[n]);
         }
 
-        pub inline fn loadT(ptr: *const anyopaque, n: usize) MM1024 {
-            return load(ptr, offsets[n]);
+        /// Store the logical nth 1024-bit word into the output buffer. Respecting the unified transpose order.
+        pub inline fn store(ptr: *anyopaque, n: usize, vec: MM1024) void {
+            store_raw(ptr, offsets[n], vec);
         }
 
-        pub inline fn store(ptr: *anyopaque, n: usize, vec: MM1024) void {
+        /// Store the physical nth 1024-bit word into the output buffer.
+        inline fn store_raw(ptr: *anyopaque, n: usize, vec: MM1024) void {
             const regs: [*][128]u8 = @ptrCast(ptr);
             regs[n] = @bitCast(vec);
         }
 
-        pub inline fn storeT(ptr: *anyopaque, n: usize, vec: MM1024) void {
-            store(ptr, offsets[n], vec);
-        }
-
         /// Shuffle the input vector into the unified transpose order.
         pub fn transpose(vec: Vector) Vector {
-            // We defer to LLVM to attempt to optimize this transpose.
             const V = @Vector(1024, E);
             return @shuffle(E, @as(V, vec), @as(V, vec), transpose_mask);
         }
 
         /// Unshuffle the input vector from the unified transpose order.
         pub fn untranspose(vec: Vector) Vector {
-            // We defer to LLVM to attempt to optimize this transpose.
             const V = @Vector(1024, E);
             return @shuffle(E, @as(V, vec), @as(V, vec), untranspose_mask);
+        }
+
+        /// A type representing an array of packed bytes.
+        pub fn PackedBytes(comptime Width: comptime_int) type {
+            return [128 * Width]u8;
+        }
+
+        /// A struct for bit-packing into an output buffer.
+        pub fn BitPacker(comptime Width: comptime_int) type {
+            return struct {
+                const Self = @This();
+
+                /// The number of times store has been called. The position in the input vector, so to speak.
+                t: comptime_int = 0,
+                /// The position in the output that we're writing to. Will finish equal to Width.
+                out_idx: comptime_int = 0,
+
+                shift_bits: comptime_int = 0,
+                mask_bits: comptime_int = Width,
+
+                /// Invoke to store the next vector.
+                pub inline fn pack(comptime self: *Self, out: *PackedBytes(Width), word: MM1024, state: MM1024) MM1024 {
+                    if (self.t > T) {
+                        @compileError("Store called too many times");
+                    }
+
+                    var tmp: MM1024 = undefined;
+                    if (self.t == 0) {
+                        tmp = @bitCast([_]u8{0} ** 128);
+                    } else {
+                        tmp = state;
+                    }
+
+                    // If we didn't take all W bits last time, then we load the remainder
+                    if (self.mask_bits < Width) {
+                        tmp = or_(tmp, and_rshift(word, self.mask_bits, bitmask(self.shift_bits)));
+                    }
+
+                    // Update the number of mask bits
+                    self.mask_bits = @min(T - self.shift_bits, Width);
+
+                    // Pull the masked bits into the tmp register
+                    tmp = or_(tmp, and_lshift(word, self.shift_bits, bitmask(self.mask_bits)));
+                    self.shift_bits += Width;
+
+                    if (self.shift_bits >= T) {
+                        // If we have a full 1024 bits, then store it and reset the tmp register
+                        store_raw(out, self.out_idx, tmp);
+                        tmp = @bitCast([_]u8{0} ** 128);
+                        self.out_idx += 1;
+                        self.shift_bits -= T;
+                    }
+
+                    return tmp;
+                }
+            };
+        }
+
+        pub fn BitUnpacker(comptime Width: comptime_int) type {
+            return struct {
+                const Self = @This();
+
+                t: comptime_int = 0,
+
+                input_idx: comptime_int = 0,
+                shift_bits: comptime_int = 0,
+
+                pub inline fn unpack(comptime self: *Self, input: *const PackedBytes(Width), state: MM1024) struct { MM1024, MM1024 } {
+                    if (self.t > T) {
+                        @compileError("Store called too many times");
+                    }
+
+                    var tmp: MM1024 = undefined;
+                    if (self.input_idx == 0) {
+                        tmp = load_raw(input, 0);
+                        self.input_idx += 1;
+                    } else {
+                        tmp = state;
+                    }
+
+                    const mask_bits = @min(T - self.shift_bits, Width);
+
+                    var next = and_rshift(tmp, self.shift_bits, bitmask(mask_bits));
+
+                    if (mask_bits != Width) {
+                        tmp = load_raw(input, self.input_idx);
+                        self.input_idx += 1;
+
+                        next = or_(next, and_lshift(tmp, mask_bits, bitmask(Width - mask_bits)));
+
+                        self.shift_bits = Width - mask_bits;
+                    } else {
+                        self.shift_bits += Width;
+                    }
+
+                    return .{ next, tmp };
+                }
+            };
         }
 
         pub inline fn add(a: MM1024, b: MM1024) MM1024 {
@@ -156,6 +259,11 @@ pub fn FastLanez(comptime E: type, comptime options: Options) type {
                 result[i] = ISA.and_rshift(lane, n, mask);
             }
             return @bitCast(result);
+        }
+
+        // Create a mask of the first `bits` bits.
+        inline fn bitmask(comptime bits: comptime_int) E {
+            return (1 << bits) - 1;
         }
     };
 }
