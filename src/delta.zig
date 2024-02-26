@@ -6,12 +6,12 @@ pub fn Delta(comptime FastLanes: type) type {
         const std = @import("std");
 
         pub fn encode(base: *const [FL.S]E, in: *const FL.Vector, out: *FL.Vector) void {
-            var prev = FL.load(base, 0);
+            var prev: FL.MM1024 = @bitCast(base.*);
             inline for (0..FL.T) |i| {
                 const next = FL.load(in, i);
-                const result = FL.subtract(next, prev);
+                const delta = FL.subtract(next, prev);
                 prev = next;
-                FL.store(out, i, result);
+                FL.store(out, i, delta);
             }
         }
 
@@ -29,7 +29,7 @@ pub fn Delta(comptime FastLanes: type) type {
             comptime var packer = FL.BitPacker(W){};
             var tmp: FL.MM1024 = undefined;
 
-            var prev = FL.load(base, 0);
+            var prev: FL.MM1024 = @bitCast(base.*);
             inline for (0..FL.T) |i| {
                 const next = FL.load(in, i);
                 const result = FL.subtract(next, prev);
@@ -43,7 +43,7 @@ pub fn Delta(comptime FastLanes: type) type {
             comptime var packer = FL.BitUnpacker(W){};
             var tmp: FL.MM1024 = undefined;
 
-            var prev = FL.load(base, 0);
+            var prev: FL.MM1024 = @bitCast(base.*);
             inline for (0..FL.T) |i| {
                 const next, tmp = packer.unpack(in, tmp);
                 const result = FL.add(prev, next);

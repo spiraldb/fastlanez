@@ -12,6 +12,7 @@ const isa = @import("isa.zig");
 
 pub const Options = struct {
     ISA: fn (comptime E: type) type = isa.FastLanez_ISA_ZIMD(1024),
+    // ISA: fn (comptime E: type) type = isa.FastLanez_ISA_Scalar,
 };
 
 pub fn FastLanez(comptime Element: type, comptime options: Options) type {
@@ -51,25 +52,27 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
         };
 
         /// Load the logical nth 1024-bit word from the input buffer. Respecting the unified transpose order.
-        pub inline fn load(ptr: *const anyopaque, n: usize) MM1024 {
+        pub inline fn load(ptr: anytype, n: usize) MM1024 {
             return load_raw(ptr, offsets[n]);
         }
 
         /// Load the physical nth 1024-bit word from the input buffer.
-        pub inline fn load_raw(ptr: *const anyopaque, n: u8) MM1024 {
-            const regs: [*]const [128]u8 = @ptrCast(ptr);
-            return @bitCast(regs[n]);
+        pub inline fn load_raw(ptr: anytype, n: u8) MM1024 {
+            const Array = @typeInfo(@TypeOf(ptr)).Pointer.child;
+            const words: *const [@sizeOf(Array) / 128][128]u8 = @ptrCast(ptr);
+            return @bitCast(words[n]);
         }
 
         /// Store the logical nth 1024-bit word into the output buffer. Respecting the unified transpose order.
-        pub inline fn store(ptr: *anyopaque, n: usize, vec: MM1024) void {
+        pub inline fn store(ptr: anytype, n: usize, vec: MM1024) void {
             store_raw(ptr, offsets[n], vec);
         }
 
         /// Store the physical nth 1024-bit word into the output buffer.
-        pub inline fn store_raw(ptr: *anyopaque, n: usize, vec: MM1024) void {
-            const regs: [*][128]u8 = @ptrCast(ptr);
-            regs[n] = @bitCast(vec);
+        pub inline fn store_raw(ptr: anytype, n: usize, word: MM1024) void {
+            const Array = @typeInfo(@TypeOf(ptr)).Pointer.child;
+            const words: *[@sizeOf(Array) / 128][128]u8 = @ptrCast(ptr);
+            words[n] = @bitCast(word);
         }
 
         /// Shuffle the input vector into the unified transpose order.
@@ -185,7 +188,7 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
         }
 
         pub inline fn add(a: MM1024, b: MM1024) MM1024 {
-            @setEvalBranchQuota(4096);
+            @setEvalBranchQuota(64_000);
             var result: Lanes = undefined;
             inline for (@as(Lanes, a), @as(Lanes, b), 0..) |lane_a, lane_b, i| {
                 result[i] = ISA.add(lane_a, lane_b);
@@ -194,7 +197,7 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
         }
 
         pub inline fn subtract(a: MM1024, b: MM1024) MM1024 {
-            @setEvalBranchQuota(4096);
+            @setEvalBranchQuota(64_000);
             var result: Lanes = undefined;
             inline for (@as(Lanes, a), @as(Lanes, b), 0..) |lane_a, lane_b, i| {
                 result[i] = ISA.subtract(lane_a, lane_b);
@@ -211,6 +214,7 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
         }
 
         pub inline fn or_(a: MM1024, b: MM1024) MM1024 {
+            @setEvalBranchQuota(64_000);
             var result: Lanes = undefined;
             inline for (@as(Lanes, a), @as(Lanes, b), 0..) |lane_a, lane_b, i| {
                 result[i] = ISA.or_(lane_a, lane_b);
@@ -220,6 +224,7 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
 
         // forall T−bit lanes i in REG return (i & MASK) << N
         pub inline fn and_lshift(vec: MM1024, n: anytype, mask: E) MM1024 {
+            @setEvalBranchQuota(64_000);
             var result: Lanes = undefined;
             inline for (@as(Lanes, vec), 0..) |lane, i| {
                 result[i] = ISA.and_lshift(lane, n, mask);
@@ -229,6 +234,7 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
 
         // forall T−bit lanes i in REG return (i & (MASK << N)) >> N
         pub inline fn and_rshift(vec: MM1024, n: anytype, mask: E) MM1024 {
+            @setEvalBranchQuota(64_000);
             var result: Lanes = undefined;
             inline for (@as(Lanes, vec), 0..) |lane, i| {
                 result[i] = ISA.and_rshift(lane, n, mask);

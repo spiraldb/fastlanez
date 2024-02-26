@@ -16,11 +16,11 @@ pub fn FastLanez_ISA_Scalar(comptime E: type) type {
         }
 
         pub inline fn and_lshift(lane: Lane, n: anytype, mask: Lane) Lane {
-            return lane & mask << n;
+            return (lane & mask) << n;
         }
 
         pub inline fn and_rshift(lane: Lane, n: anytype, mask: Lane) Lane {
-            return lane & (mask << n) >> n;
+            return (lane & (mask << n)) >> n;
         }
     };
 }
