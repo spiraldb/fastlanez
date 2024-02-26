@@ -20,35 +20,8 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
     // The type of a single lane of the ISA.
     const Lane = ISA.Lane;
     const NLanes = 1024 / @bitSizeOf(Lane);
+
     const Lanes = [NLanes]ISA.Lane;
-
-    // This unified transpose layout allows us to operate efficiently using a variety of SIMD lane widths.
-    const ORDER: [8]u8 = .{ 0, 4, 2, 6, 1, 5, 3, 7 };
-
-    // Comptime compute the transpose and untranspose masks.
-    const transpose_mask: [1024]i32 = blk: {
-        @setEvalBranchQuota(4096);
-        var mask: [1024]i32 = undefined;
-        var mask_idx = 0;
-        for (0..8) |row| {
-            for (ORDER) |o| {
-                for (0..16) |i| {
-                    mask[mask_idx] = (i * 64) + (o * 8) + row;
-                    mask_idx += 1;
-                }
-            }
-        }
-        break :blk mask;
-    };
-
-    const untranspose_mask: [1024]i32 = blk: {
-        @setEvalBranchQuota(4096);
-        var mask: [1024]i32 = undefined;
-        for (0..1024) |i| {
-            mask[transpose_mask[i]] = i;
-        }
-        break :blk mask;
-    };
 
     return struct {
         /// The type of the element.
@@ -83,7 +56,7 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
         }
 
         /// Load the physical nth 1024-bit word from the input buffer.
-        inline fn load_raw(ptr: *const anyopaque, n: u8) MM1024 {
+        pub inline fn load_raw(ptr: *const anyopaque, n: u8) MM1024 {
             const regs: [*]const [128]u8 = @ptrCast(ptr);
             return @bitCast(regs[n]);
         }
@@ -94,7 +67,7 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
         }
 
         /// Store the physical nth 1024-bit word into the output buffer.
-        inline fn store_raw(ptr: *anyopaque, n: usize, vec: MM1024) void {
+        pub inline fn store_raw(ptr: *anyopaque, n: usize, vec: MM1024) void {
             const regs: [*][128]u8 = @ptrCast(ptr);
             regs[n] = @bitCast(vec);
         }
@@ -131,16 +104,17 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
 
                 /// Invoke to store the next vector.
                 pub inline fn pack(comptime self: *Self, out: *PackedBytes(Width), word: MM1024, state: MM1024) MM1024 {
-                    if (self.t > T) {
-                        @compileError("Store called too many times");
-                    }
-
                     var tmp: MM1024 = undefined;
                     if (self.t == 0) {
                         tmp = @bitCast([_]u8{0} ** 128);
                     } else {
                         tmp = state;
                     }
+
+                    if (self.t > T) {
+                        @compileError("Store called too many times");
+                    }
+                    self.t += 1;
 
                     // If we didn't take all W bits last time, then we load the remainder
                     if (self.mask_bits < Width) {
@@ -180,6 +154,7 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
                     if (self.t > T) {
                         @compileError("Store called too many times");
                     }
+                    self.t += 1;
 
                     var tmp: MM1024 = undefined;
                     if (self.input_idx == 0) {
@@ -267,6 +242,34 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
         }
     };
 }
+
+// This unified transpose layout allows us to operate efficiently using a variety of SIMD lane widths.
+const ORDER: [8]u8 = .{ 0, 4, 2, 6, 1, 5, 3, 7 };
+
+// Comptime compute the transpose and untranspose masks.
+const transpose_mask: [1024]i32 = blk: {
+    @setEvalBranchQuota(4096);
+    var mask: [1024]i32 = undefined;
+    var mask_idx = 0;
+    for (0..8) |row| {
+        for (ORDER) |o| {
+            for (0..16) |i| {
+                mask[mask_idx] = (i * 64) + (o * 8) + row;
+                mask_idx += 1;
+            }
+        }
+    }
+    break :blk mask;
+};
+
+const untranspose_mask: [1024]i32 = blk: {
+    @setEvalBranchQuota(4096);
+    var mask: [1024]i32 = undefined;
+    for (0..1024) |i| {
+        mask[transpose_mask[i]] = i;
+    }
+    break :blk mask;
+};
 
 test "fastlanez transpose" {
     const std = @import("std");

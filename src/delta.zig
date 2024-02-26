@@ -10,8 +10,8 @@ pub fn Delta(comptime FastLanes: type) type {
             inline for (0..FL.T) |i| {
                 const next = FL.load(in, i);
                 const result = FL.subtract(next, prev);
-                FL.store(out, i, result);
                 prev = next;
+                FL.store(out, i, result);
             }
         }
 
@@ -20,8 +20,8 @@ pub fn Delta(comptime FastLanes: type) type {
             inline for (0..FL.T) |i| {
                 const delta = FL.load(in, i);
                 const result = FL.add(prev, delta);
-                FL.store(out, i, result);
                 prev = result;
+                FL.store(out, i, result);
             }
         }
 

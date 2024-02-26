@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const cycleclock = @import("cycleclock");
+const fl = @import("fastlanes.zig");
 
 const dbg = builtin.mode == .Debug;
 
@@ -37,4 +38,55 @@ pub fn Bench(comptime name: []const u8, comptime options: Options) type {
             std.debug.print(", {} tuples per cycle\n", .{1024 * options.iterations / cycles});
         }
     };
+}
+
+fn bench_delta_pack() !void {
+    const Delta = @import("./delta.zig").Delta;
+
+    inline for (.{ u8, u16, u32, u64 }) |T| {
+        const FL = fl.FastLanez(T, .{});
+
+        try Bench("delta pack " ++ @typeName(T), .{}).bench(struct {
+            const base = [_]T{0} ** (1024 / @bitSizeOf(T));
+            const input: [1024]T = .{1} ** 1024;
+
+            pub fn run(_: @This()) void {
+                var output: [384]u8 = undefined;
+                Delta(FL).pack(3, &base, &input, &output);
+                std.mem.doNotOptimizeAway(output);
+            }
+        });
+    }
+}
+
+fn bench_delta_unpack() !void {
+    const Delta = @import("./delta.zig").Delta;
+
+    inline for (.{ u8, u16, u32, u64 }) |T| {
+        const FL = fl.FastLanez(T, .{});
+
+        try Bench("delta unpack " ++ @typeName(T), .{}).bench(struct {
+            base: [1024 / @bitSizeOf(T)]T,
+            delta: [384]u8,
+
+            pub fn setup() @This() {
+                const base = [_]T{0} ** (1024 / @bitSizeOf(T));
+                const input: [1024]T = .{1} ** 1024;
+                var delta: [384]u8 = undefined;
+                Delta(FL).pack(3, &base, &input, &delta);
+                return .{ .base = base, .delta = delta };
+            }
+
+            pub fn run(self: *const @This()) void {
+                var output: [1024]T = undefined;
+                Delta(FL).unpack(3, &self.base, &self.delta, &output);
+                std.mem.doNotOptimizeAway(output);
+            }
+        });
+    }
+}
+
+pub fn main() !void {
+    try bench_delta_pack();
+    try bench_delta_unpack();
 }
