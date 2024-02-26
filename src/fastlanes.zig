@@ -61,9 +61,7 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
         pub fn pairwise(comptime Codec: type) type {
             return struct {
                 pub fn encode(base: *const [S]E, in: *const Vector, out: *Vector) void {
-                    const base_mm: *const [N / 8]MM = @ptrCast(base);
-                    // const in_mm: *const [N]MM = @ptrCast(in);
-                    // const out_mm: *[N]MM = @ptrCast(out);
+                    @setEvalBranchQuota(64_000);
 
                     var prev: MM = undefined;
 
@@ -73,13 +71,49 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
 
                         if (n % 8 == 0) {
                             // Start a new loop;
-                            prev = @bitCast(base_mm[offset / 8 / (@bitSizeOf(MM) / T) ..].*);
+                            prev = @bitCast(base[offset / 8 ..][0..M].*);
                         }
 
-                        const next: MM = @bitCast(in[offset..][0..M].*);
-                        out[offset..][0..M].* = Codec.encode(prev, next);
+                        const next: MM = load_mm(in, offset / M);
+                        store_mm(out, offset / N, Codec.encode(prev, next));
                         prev = next;
                     }
+                }
+
+                pub fn decode(base: *const [S]E, in: *const Vector, out: *Vector) void {
+                    @setEvalBranchQuota(64_000);
+
+                    var prev: MM = undefined;
+
+                    // TODO(ngates): break this into two loops and avoid inlining the outer?
+                    inline for (0..N) |n| {
+                        // Loop over each lane.
+                        const offset = untranspose_mask[n];
+
+                        // TODO(ngates): which of these matters?
+                        if (offset % 8 == 0) {
+                            // Start a new loop;
+                            prev = load_mm(base, offset / 128);
+                        }
+
+                        const next: MM = load_mm(in, offset / M);
+                        const result = Codec.decode(prev, next);
+                        store_mm(out, offset / N, result);
+                        prev = result;
+                    }
+                }
+
+                /// Load the physical nth 1024bit word from the input buffer.
+                inline fn load_mm(ptr: anytype, n: usize) MM {
+                    const Array = @typeInfo(@TypeOf(ptr)).Pointer.child;
+                    const words: *const [@sizeOf(Array) / @sizeOf(MM)][@sizeOf(MM)]u8 = @ptrCast(ptr);
+                    return @bitCast(words[n]);
+                }
+
+                inline fn store_mm(ptr: anytype, n: usize, value: MM) void {
+                    const Array = @typeInfo(@TypeOf(ptr)).Pointer.child;
+                    const words: *[@sizeOf(Array) / @sizeOf(MM)][@sizeOf(MM)]u8 = @ptrCast(ptr);
+                    words[n] = @bitCast(value);
                 }
             };
         }

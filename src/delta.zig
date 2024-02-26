@@ -46,29 +46,34 @@ test "fastlanez delta bench" {
     const Bench = @import("bench.zig").Bench;
     const arange = @import("helper.zig").arange;
 
-    const T = u16;
-    const FL = fl.FastLanez(T, .{});
+    inline for (.{ u8, u16, u32, u64 }) |T| {
+        const FL = fl.FastLanez(T, .{});
 
-    try Bench("delta encode", .{}).bench(struct {
-        const base = [_]T{0} ** (1024 / @bitSizeOf(T));
-        const input = arange(T, 1024);
-        const tinput = FL.transpose(input);
+        try Bench("delta encode " ++ @typeName(T), .{}).bench(struct {
+            const base = [_]T{0} ** (1024 / @bitSizeOf(T));
+            const input = arange(T, 1024);
+            const tinput = FL.transpose(input);
 
-        pub fn run(_: @This()) void {
-            var output: [1024]T = undefined;
-            Delta(FL).encode(&base, &tinput, &output);
-            std.mem.doNotOptimizeAway(output);
-        }
-    });
+            pub fn run(_: @This()) void {
+                var output: [1024]T = undefined;
+                Delta(FL).encode(&base, &tinput, &output);
+                std.mem.doNotOptimizeAway(output);
+            }
+        });
+    }
 
-    try Bench("delta decode", .{}).bench(struct {
-        const base = [_]T{0} ** (1024 / @bitSizeOf(T));
-        const input: [1024]T = .{1} ** 1024;
+    inline for (.{ u8, u16, u32, u64 }) |T| {
+        const FL = fl.FastLanez(T, .{});
 
-        pub fn run(_: @This()) void {
-            var output: [1024]T = undefined;
-            Delta(FL).encode(&base, &input, &output);
-            std.mem.doNotOptimizeAway(output);
-        }
-    });
+        try Bench("delta decode " ++ @typeName(T), .{}).bench(struct {
+            const base = [_]T{0} ** (1024 / @bitSizeOf(T));
+            const input: [1024]T = .{1} ** 1024;
+
+            pub fn run(_: @This()) void {
+                var output: [1024]T = undefined;
+                Delta(FL).decode(&base, &input, &output);
+                std.mem.doNotOptimizeAway(output);
+            }
+        });
+    }
 }
