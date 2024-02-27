@@ -11,8 +11,8 @@
 const isa = @import("isa.zig");
 
 pub const Options = struct {
-    //ISA: fn (comptime E: type) type = isa.FastLanez_ISA_ZIMD(128),
-    ISA: fn (comptime E: type) type = isa.FastLanez_ISA_Scalar,
+    ISA: fn (comptime E: type) type = isa.FastLanez_ISA_ZIMD(128),
+    // ISA: fn (comptime E: type) type = isa.FastLanez_ISA_Scalar,
 };
 
 pub fn FastLanez(comptime Element: type, comptime options: Options) type {
@@ -23,6 +23,8 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
         pub const MM = ISA.MM;
         /// The number of elements in an MM register.
         const M = @bitSizeOf(MM) / T;
+        /// The number of MM registers in a MM1024 bit vector.
+        const NMM = 1024 / @bitSizeOf(MM);
 
         pub const Vec = [1024 / NLanes]E;
 
@@ -30,6 +32,7 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
         pub const Lane = MM;
         pub const NLanes = 1024 / @bitSizeOf(MM);
         pub const Lanes = [NLanes]ISA.MM;
+        /// The number of MM registers in a whole vector .
         pub const N = 1024 * T / @bitSizeOf(MM);
 
         /// The type of the element.
@@ -58,24 +61,92 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
             break :blk _offsets;
         };
 
+        /// MM offsets required to iterate over a 1024 element vector.
+        const mm_offsets: [N]comptime_int = blk: {
+            var _offsets: [N]comptime_int = undefined;
+            var offset = 0;
+
+            // The arrangement of the tiles as per the unified transpose layout. See Figure 6.
+            const tile_cols = 64 / T;
+            const tile_rows = 8 / tile_cols;
+            const lanes_per_row = 1024 / @bitSizeOf(MM);
+
+            // Loop over the lanes of the arrangement.
+            for (0..lanes_per_row) |l| {
+                // Figure out which tile column we're in.
+                const col = l * M / 16;
+
+                // Figure out the element offset within the tile.
+                const elem = (l * M) % 16;
+
+                // Within each lane, loop over the rows of tiles
+                for (0..tile_rows) |tr| {
+                    // Compute which tile we're in.
+                    const tile = ORDER[col] + tr;
+
+                    // Within each tile, loop over the 8 element rows.
+                    for (0..8) |r| {
+                        // Compute a element offset based on the unified tranpose order.
+                        // Normalize it into a lane index.
+                        const element = ((tile * 16) + (r * 128) + elem);
+                        _offsets[offset] = element / M;
+                        offset += 1;
+                    }
+                }
+            }
+
+            break :blk _offsets;
+        };
+
+        /// The MM offsets within an S-element (1024-bit) base vector.
+        const mm_base_offsets: [NMM]comptime_int = blk: {
+            var _offsets: [NMM]comptime_int = undefined;
+            var offset = 0;
+
+            // The arrangement of the tiles as per the unified transpose layout. See Figure 6.
+            const tile_cols = 64 / T;
+            const tile_rows = 8 / tile_cols;
+            const lanes_per_row = 1024 / @bitSizeOf(MM);
+
+            // Loop over the lanes of the arrangement.
+            for (0..lanes_per_row) |l| {
+                // Figure out which tile column we're in.
+                const col = l * M / 16;
+
+                // Figure out the element offset within the tile.
+                const elem = (l * M) % 16;
+
+                // Compute which tile we're in.
+                const tile = ORDER[col] / tile_rows;
+
+                // Compute a element offset based on the unified tranpose order.
+                // Normalize it into a lane index.
+                const element = ((tile * 16) + elem);
+                _offsets[offset] = element / M;
+                offset += 1;
+            }
+
+            break :blk _offsets;
+        };
+
         pub fn pairwise(comptime Codec: type) type {
             return struct {
                 pub fn encode(base: *const [S]E, in: *const Vector, out: *Vector) void {
-                    @setEvalBranchQuota(64_000);
-
+                    const std = @import("std");
                     var prev: MM = undefined;
 
-                    inline for (0..N) |n| {
-                        // Loop over each lane.
-                        const offset = untranspose_mask[n];
+                    @compileLog(mm_offsets);
 
-                        if (n % 8 == 0) {
-                            // Start a new loop;
-                            prev = load_mm(base, offset / N);
+                    inline for (mm_offsets, 0..) |o, i| {
+                        if (i % T == 0) {
+                            prev = load_mm(base, mm_base_offsets[i / T]);
+                            std.debug.print("BASE {any}\n", .{prev});
                         }
 
-                        const next: MM = load_mm(in, offset / M);
-                        store_mm(out, offset / N, Codec.encode(prev, next));
+                        const next: MM = load_mm(in, o);
+                        const result = Codec.encode(prev, next);
+                        std.debug.print("Prev {any} Next {any} => {any}\n", .{ prev, next, result });
+                        store_mm(out, o, result);
                         prev = next;
                     }
                 }
@@ -97,18 +168,19 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
 
                         const next: MM = load_mm(in, offset / M);
                         const result = Codec.decode(prev, next);
-                        store_mm(out, offset / N, result);
+                        store_mm(out, offset / M, result);
                         prev = result;
                     }
                 }
 
-                /// Load the physical nth 1024bit word from the input buffer.
+                /// Load the physical nth MM word from the input buffer.
                 inline fn load_mm(ptr: anytype, n: usize) MM {
                     const Array = @typeInfo(@TypeOf(ptr)).Pointer.child;
                     const words: *const [@sizeOf(Array) / @sizeOf(MM)][@sizeOf(MM)]u8 = @ptrCast(ptr);
                     return @bitCast(words[n]);
                 }
 
+                /// Store the physical nth MM word into the output buffer.
                 inline fn store_mm(ptr: anytype, n: usize, value: MM) void {
                     const Array = @typeInfo(@TypeOf(ptr)).Pointer.child;
                     const words: *[@sizeOf(Array) / @sizeOf(MM)][@sizeOf(MM)]u8 = @ptrCast(ptr);
@@ -316,7 +388,7 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
 }
 
 // This unified transpose layout allows us to operate efficiently using a variety of SIMD lane widths.
-const ORDER: [8]u8 = .{ 0, 4, 2, 6, 1, 5, 3, 7 };
+const ORDER: [8]comptime_int = .{ 0, 4, 2, 6, 1, 5, 3, 7 };
 
 // Comptime compute the transpose and untranspose masks.
 const transpose_mask: [1024]i32 = blk: {
