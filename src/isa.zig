@@ -20,7 +20,7 @@ pub fn FastLanez_ISA_Scalar(comptime E: type) type {
         }
 
         pub inline fn and_rshift(lane: MM, n: anytype, mask: MM) MM {
-            return (lane & (mask << n)) >> n;
+            return (lane & (comptime mask << n)) >> n;
         }
     };
 }
@@ -56,7 +56,7 @@ pub fn FastLanez_ISA_ZIMD(comptime vectorWidth: comptime_int) fn (E: type) type 
                 pub inline fn and_rshift(lane: MM, n: u8, mask: E) MM {
                     const maskvec: MM = @splat(mask);
                     const nvec: MM = @splat(n);
-                    return (lane & (maskvec << nvec)) >> @intCast(nvec);
+                    return (lane & (comptime maskvec << nvec)) >> @intCast(nvec);
                 }
             };
         }

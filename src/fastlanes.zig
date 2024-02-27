@@ -11,7 +11,7 @@
 const isa = @import("isa.zig");
 
 pub const Options = struct {
-    ISA: fn (comptime E: type) type = isa.FastLanez_ISA_ZIMD(128),
+    ISA: fn (comptime E: type) type = isa.FastLanez_ISA_ZIMD(1024),
     // ISA: fn (comptime E: type) type = isa.FastLanez_ISA_Scalar,
 };
 
@@ -19,34 +19,24 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
     const ISA = options.ISA(Element);
 
     return struct {
-        /// The variable width SIMD register as supported by the ISA.
-        pub const MM = ISA.MM;
-        /// The number of elements in an MM register.
-        const M = @bitSizeOf(MM) / T;
-        /// The number of MM registers in a MM1024 bit vector.
-        const NMM = 1024 / @bitSizeOf(MM);
-
-        pub const Vec = [1024 / NLanes]E;
-
-        // The type of a single lane of the ISA.
-        pub const Lane = MM;
-        pub const NLanes = 1024 / @bitSizeOf(MM);
-        pub const Lanes = [NLanes]ISA.MM;
-        /// The number of MM registers in a whole vector .
-        pub const N = 1024 * T / @bitSizeOf(MM);
-
         /// The type of the element.
         pub const E = Element;
         /// The bit size of the element type.
         pub const T = @bitSizeOf(E);
         /// The number of elements in a single MM1024 word.
         pub const S = 1024 / T;
-
         /// A vector of 1024 elements.
         pub const Vector = [1024]E;
 
-        /// Represents the fastlanes virtual 1024bit SIMD word.
-        pub const MM1024 = Lanes;
+        /// The variable width SIMD word as supported by the ISA.
+        pub const MM = ISA.MM;
+        /// The virtual 1024-bit SIMD word.
+        pub const MM1024 = [nwords]ISA.MM;
+
+        // The number of MM words in an MM1024 word.
+        const nwords = 1024 / @bitSizeOf(MM);
+        /// The number of elements in an MM word.
+        const m = @bitSizeOf(MM) / T;
 
         /// Offset required to iterate over 1024 bit vectors according to the unified transpose order.
         const offsets: [T]u8 = blk: {
@@ -62,8 +52,9 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
         };
 
         /// MM offsets required to iterate over a 1024 element vector.
-        const mm_offsets: [N]comptime_int = blk: {
-            var _offsets: [N]comptime_int = undefined;
+        const mm_offsets: [T * nwords]comptime_int = blk: {
+            @setEvalBranchQuota(8192);
+            var _offsets: [T * nwords]comptime_int = undefined;
             var offset = 0;
 
             // The arrangement of the tiles as per the unified transpose layout. See Figure 6.
@@ -74,10 +65,10 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
             // Loop over the lanes of the arrangement.
             for (0..lanes_per_row) |l| {
                 // Figure out which tile column we're in.
-                const col = l * M / 16;
+                const col = l * m / 16;
 
                 // Figure out the element offset within the tile.
-                const elem = (l * M) % 16;
+                const elem = (l * m) % 16;
 
                 // Within each lane, loop over the rows of tiles
                 for (0..tile_rows) |tr| {
@@ -98,8 +89,8 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
         };
 
         /// The MM offsets within an S-element (1024-bit) base vector.
-        const mm_base_offsets: [NMM]comptime_int = blk: {
-            var _offsets: [NMM]comptime_int = undefined;
+        const mm_base_offsets: [nwords]comptime_int = blk: {
+            var _offsets: [nwords]comptime_int = undefined;
             var offset = 0;
 
             // The arrangement of the tiles as per the unified transpose layout. See Figure 6.
@@ -110,10 +101,10 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
             // Loop over the lanes of the arrangement.
             for (0..lanes_per_row) |l| {
                 // Figure out which tile column we're in.
-                const col = l * M / 16;
+                const col = l * m / 16;
 
                 // Figure out the element offset within the tile.
-                const elem = (l * M) % 16;
+                const elem = (l * m) % 16;
 
                 // Compute which tile we're in.
                 const tile = ORDER[col];
@@ -130,44 +121,46 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
             return struct {
                 /// Note: it is assumed the base is already transposed.
                 pub fn encode(base: *const [S]E, in: *const Vector, out: *Vector) void {
+                    @setEvalBranchQuota(8192);
                     var prev: MM = undefined;
 
                     inline for (mm_offsets, 0..) |offset, i| {
-                        if (i % T == 0) {
+                        if (comptime i % T == 0) {
                             prev = load_mm(base, i / T);
                         }
 
-                        const next: MM = load_mm(in, offset / M);
+                        const next: MM = load_mm(in, offset / m);
                         const result = Codec.encode(prev, next);
-                        store_mm(out, offset / M, result);
+                        store_mm(out, offset / m, result);
                         prev = next;
                     }
                 }
 
                 pub fn decode(base: *const [S]E, in: *const Vector, out: *Vector) void {
+                    @setEvalBranchQuota(8192);
                     var prev: MM = undefined;
 
                     inline for (mm_offsets, 0..) |offset, i| {
-                        if (i % T == 0) {
+                        if (comptime i % T == 0) {
                             prev = load_mm(base, i / T);
                         }
 
-                        const next: MM = load_mm(in, offset / M);
+                        const next: MM = load_mm(in, offset / m);
                         const result = Codec.decode(prev, next);
-                        store_mm(out, offset / M, result);
+                        store_mm(out, offset / m, result);
                         prev = result;
                     }
                 }
 
                 /// Load the physical nth MM word from the input buffer.
-                inline fn load_mm(ptr: anytype, n: usize) MM {
+                fn load_mm(ptr: anytype, n: usize) MM {
                     const Array = @typeInfo(@TypeOf(ptr)).Pointer.child;
                     const words: *const [@sizeOf(Array) / @sizeOf(MM)][@sizeOf(MM)]u8 = @ptrCast(ptr);
                     return @bitCast(words[n]);
                 }
 
                 /// Store the physical nth MM word into the output buffer.
-                inline fn store_mm(ptr: anytype, n: usize, value: MM) void {
+                fn store_mm(ptr: anytype, n: usize, value: MM) void {
                     const Array = @typeInfo(@TypeOf(ptr)).Pointer.child;
                     const words: *[@sizeOf(Array) / @sizeOf(MM)][@sizeOf(MM)]u8 = @ptrCast(ptr);
                     words[n] = @bitCast(value);
@@ -313,8 +306,8 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
 
         pub inline fn add(a: MM1024, b: MM1024) MM1024 {
             @setEvalBranchQuota(64_000);
-            var result: Lanes = undefined;
-            inline for (@as(Lanes, a), @as(Lanes, b), 0..) |lane_a, lane_b, i| {
+            var result: MM1024 = undefined;
+            inline for (@as(MM1024, a), @as(MM1024, b), 0..) |lane_a, lane_b, i| {
                 result[i] = ISA.add(lane_a, lane_b);
             }
             return @bitCast(result);
@@ -322,16 +315,16 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
 
         pub inline fn subtract(a: MM1024, b: MM1024) MM1024 {
             @setEvalBranchQuota(64_000);
-            var result: Lanes = undefined;
-            inline for (@as(Lanes, a), @as(Lanes, b), 0..) |lane_a, lane_b, i| {
+            var result: MM1024 = undefined;
+            inline for (@as(MM1024, a), @as(MM1024, b), 0..) |lane_a, lane_b, i| {
                 result[i] = ISA.subtract(lane_a, lane_b);
             }
             return @bitCast(result);
         }
 
         pub inline fn and_(a: MM1024, b: MM1024) MM1024 {
-            var result: Lanes = undefined;
-            inline for (@as(Lanes, a), @as(Lanes, b), 0..) |lane_a, lane_b, i| {
+            var result: MM1024 = undefined;
+            inline for (@as(MM1024, a), @as(MM1024, b), 0..) |lane_a, lane_b, i| {
                 result[i] = ISA.and_(lane_a, lane_b);
             }
             return @bitCast(result);
@@ -339,8 +332,8 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
 
         pub inline fn or_(a: MM1024, b: MM1024) MM1024 {
             @setEvalBranchQuota(64_000);
-            var result: Lanes = undefined;
-            inline for (@as(Lanes, a), @as(Lanes, b), 0..) |lane_a, lane_b, i| {
+            var result: MM1024 = undefined;
+            inline for (@as(MM1024, a), @as(MM1024, b), 0..) |lane_a, lane_b, i| {
                 result[i] = ISA.or_(lane_a, lane_b);
             }
             return @bitCast(result);
@@ -349,8 +342,8 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
         // forall T−bit lanes i in REG return (i & MASK) << N
         pub inline fn and_lshift(vec: MM1024, n: anytype, mask: E) MM1024 {
             @setEvalBranchQuota(64_000);
-            var result: Lanes = undefined;
-            inline for (@as(Lanes, vec), 0..) |lane, i| {
+            var result: MM1024 = undefined;
+            inline for (@as(MM1024, vec), 0..) |lane, i| {
                 result[i] = ISA.and_lshift(lane, n, mask);
             }
             return @bitCast(result);
@@ -359,8 +352,8 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
         // forall T−bit lanes i in REG return (i & (MASK << N)) >> N
         pub inline fn and_rshift(vec: MM1024, n: anytype, mask: E) MM1024 {
             @setEvalBranchQuota(64_000);
-            var result: Lanes = undefined;
-            inline for (@as(Lanes, vec), 0..) |lane, i| {
+            var result: MM1024 = undefined;
+            inline for (@as(MM1024, vec), 0..) |lane, i| {
                 result[i] = ISA.and_rshift(lane, n, mask);
             }
             return @bitCast(result);
