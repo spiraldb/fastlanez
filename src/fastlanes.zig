@@ -87,9 +87,7 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
                     // Within each tile, loop over the 8 element rows.
                     for (0..8) |r| {
                         // Compute a element offset based on the unified tranpose order.
-                        // Normalize it into a lane index.
-                        const element = ((tile * 16) + (r * 128) + elem);
-                        _offsets[offset] = element / M;
+                        _offsets[offset] = ((tile * 16) + (r * 128) + elem);
                         offset += 1;
                     }
                 }
@@ -120,9 +118,7 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
                 const tile = ORDER[col] / tile_rows;
 
                 // Compute a element offset based on the unified tranpose order.
-                // Normalize it into a lane index.
-                const element = ((tile * 16) + elem);
-                _offsets[offset] = element / M;
+                _offsets[offset] = ((tile * 16) + elem);
                 offset += 1;
             }
 
@@ -143,10 +139,10 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
                             std.debug.print("BASE {any}\n", .{prev});
                         }
 
-                        const next: MM = load_mm(in, o);
+                        const next: MM = load_mm(in, o / M);
                         const result = Codec.encode(prev, next);
                         std.debug.print("Prev {any} Next {any} => {any}\n", .{ prev, next, result });
-                        store_mm(out, o, result);
+                        store_mm(out, o / M, result);
                         prev = next;
                     }
                 }
