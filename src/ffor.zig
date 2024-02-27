@@ -1,49 +1,80 @@
-const fl = @import("fastlanes.zig");
+pub fn FFoR(comptime FastLanes: type) type {
+    const FL = FastLanes;
 
-pub fn FFoR(comptime E: type) type {
-    return struct {
-        const std = @import("std");
-        pub const FL = fl.FastLanez(E, .{});
+    // We need to be able to take our own arguments.
+    // Maybe the encode function takes options? Or we use the struct value?
+    return FL.Elementwise(struct {
+        const Self = @This();
 
-        pub fn pack(comptime W: comptime_int, reference: E, in: *const FL.Vector, out: *FL.PackedVector(W)) void {
-            inline for (0..FL.T) |t| {
-                const next = FL.subtract(FL.load(in, t), reference);
-                // Ah, can we make PackedVector a stateful thing?
-                FL.pack(W, out, t, next);
-            }
+        reference: FL.MM,
+
+        pub fn init(value: FL.E) Self {
+            return Self{ .reference = FL.splat(value) };
         }
 
-        /// Fused kernel for unpacking adding the reference value to each vector.
-        pub fn unpack_ffor(comptime W: comptime_int, reference: E, in: *const FL.PackedVector(W), out: *FL.Vector) void {
-            inline for (0..FL.T) |t| {
-                const next = FL.add(FL.unpack(W, in, t), reference);
-                FL.store(out, t, next);
-            }
+        pub fn encode(self: Self, word: FL.MM) FL.MM {
+            return word -% self.reference;
         }
-    };
+
+        pub fn decode(self: Self, word: FL.MM) FL.MM {
+            return word +% self.reference;
+        }
+    });
 }
 
 test "fastlanez ffor" {
+    const fl = @import("fastlanes.zig");
     const std = @import("std");
     const repeat = @import("helper.zig").repeat;
 
     const T = u16;
-    const F = FFoR(T);
+    const FL = fl.FastLanez(T, .{});
+    const F = FFoR(FL).init(.{ .reference = FL.splat(1) });
 
     const input = repeat(T, 5, 1024);
-    const tinput = Codec.FL.transpose(input);
+    var output: [1024]T = undefined;
 
-    var actual: [1024]T = undefined;
-    Codec.encode(&base, &tinput, &actual);
+    F.encode(&input, &output);
+    try std.testing.expectEqual(output, repeat(T, 4, 1024));
 
-    actual = Codec.FL.untranspose(actual);
+    var decoded: [1024]T = undefined;
+    F.decode(&output, &decoded);
+    try std.testing.expectEqual(decoded, input);
+}
 
-    for (0..1024) |i| {
-        // Since fastlanes processes based on 16 blocks, we expect a zero delta every 1024 / 16 = 64 elements.
-        if (i % @bitSizeOf(T) == 0) {
-            try std.testing.expectEqual(i, actual[i]);
-        } else {
-            try std.testing.expectEqual(1, actual[i]);
-        }
+test "fastlanez ffor bench" {
+    const std = @import("std");
+    const fl = @import("fastlanes.zig");
+    const Bench = @import("bench.zig").Bench;
+    const arange = @import("helper.zig").arange;
+
+    inline for (.{ u8, u16, u32, u64 }) |T| {
+        const FL = fl.FastLanez(T, .{});
+
+        try Bench("ffor encode " ++ @typeName(T), .{}).bench(struct {
+            const F = FFoR(FL).init(.{ .reference = FL.splat(1) });
+            const input = arange(T, 1024);
+
+            pub fn run(_: @This()) void {
+                var output: [1024]T = undefined;
+                F.encode(&input, &output);
+                std.mem.doNotOptimizeAway(output);
+            }
+        });
+    }
+
+    inline for (.{ u8, u16, u32, u64 }) |T| {
+        const FL = fl.FastLanez(T, .{});
+
+        try Bench("ffor decode " ++ @typeName(T), .{}).bench(struct {
+            const F = FFoR(FL).init(.{ .reference = FL.splat(1) });
+            const input: [1024]T = .{1} ** 1024;
+
+            pub fn run(_: @This()) void {
+                var output: [1024]T = undefined;
+                F.decode(&input, &output);
+                std.mem.doNotOptimizeAway(output);
+            }
+        });
     }
 }

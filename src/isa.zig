@@ -15,6 +15,10 @@ pub fn FastLanez_ISA_Scalar(comptime E: type) type {
             return a | b;
         }
 
+        pub inline fn splat(value: E) MM {
+            return value;
+        }
+
         pub inline fn and_lshift(lane: MM, n: anytype, mask: MM) MM {
             return (lane & mask) << n;
         }
@@ -45,6 +49,10 @@ pub fn FastLanez_ISA_ZIMD(comptime vectorWidth: comptime_int) fn (E: type) type 
 
                 pub inline fn or_(a: MM, b: MM) MM {
                     return a | b;
+                }
+
+                pub inline fn splat(value: E) MM {
+                    return @splat(value);
                 }
 
                 pub inline fn and_lshift(lane: MM, n: u8, mask: E) MM {

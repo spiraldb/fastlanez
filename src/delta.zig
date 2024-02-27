@@ -1,12 +1,14 @@
 pub fn Delta(comptime FastLanes: type) type {
     const FL = FastLanes;
 
-    return FL.pairwise(struct {
-        pub inline fn encode(prev: FL.MM, next: FL.MM) FL.MM {
+    return FL.Pairwise(struct {
+        const Self = @This();
+
+        pub inline fn encode(_: Self, prev: FL.MM, next: FL.MM) FL.MM {
             return next -% prev;
         }
 
-        pub inline fn decode(prev: FL.MM, next: FL.MM) FL.MM {
+        pub inline fn decode(_: Self, prev: FL.MM, next: FL.MM) FL.MM {
             return prev +% next;
         }
     });
@@ -25,7 +27,7 @@ test "fastlanez delta" {
     const tinput = FL.transpose(input);
 
     var actual: [1024]T = undefined;
-    Delta(FL).encode(&base, &tinput, &actual);
+    Delta(FL).init(.{}).encode(&base, &tinput, &actual);
     std.mem.doNotOptimizeAway(actual);
 
     actual = FL.untranspose(actual);
@@ -56,7 +58,7 @@ test "fastlanez delta bench" {
 
             pub fn run(_: @This()) void {
                 var output: [1024]T = undefined;
-                Delta(FL).encode(&base, &tinput, &output);
+                Delta(FL).init(.{}).encode(&base, &tinput, &output);
                 std.mem.doNotOptimizeAway(output);
             }
         });
@@ -71,7 +73,7 @@ test "fastlanez delta bench" {
 
             pub fn run(_: @This()) void {
                 var output: [1024]T = undefined;
-                Delta(FL).decode(&base, &input, &output);
+                Delta(FL).init(.{}).decode(&base, &input, &output);
                 std.mem.doNotOptimizeAway(output);
             }
         });

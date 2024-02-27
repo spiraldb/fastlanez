@@ -11,13 +11,11 @@
 const isa = @import("isa.zig");
 
 pub const Options = struct {
-    ISA: fn (comptime E: type) type = isa.FastLanez_ISA_ZIMD(1024),
+    ISA: fn (comptime E: type) type = isa.FastLanez_ISA_ZIMD(128),
     // ISA: fn (comptime E: type) type = isa.FastLanez_ISA_Scalar,
 };
 
 pub fn FastLanez(comptime Element: type, comptime options: Options) type {
-    const ISA = options.ISA(Element);
-
     return struct {
         /// The type of the element.
         pub const E = Element;
@@ -27,6 +25,9 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
         pub const S = 1024 / T;
         /// A vector of 1024 elements.
         pub const Vector = [1024]E;
+
+        const ISA = options.ISA(Element);
+        pub const splat = ISA.splat;
 
         /// The variable width SIMD word as supported by the ISA.
         pub const MM = ISA.MM;
@@ -60,10 +61,9 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
             // The arrangement of the tiles as per the unified transpose layout. See Figure 6.
             const tile_cols = 64 / T;
             const tile_rows = 8 / tile_cols;
-            const lanes_per_row = 1024 / @bitSizeOf(MM);
 
             // Loop over the lanes of the arrangement.
-            for (0..lanes_per_row) |l| {
+            for (0..nwords) |l| {
                 // Figure out which tile column we're in.
                 const col = l * m / 16;
 
@@ -96,10 +96,9 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
             // The arrangement of the tiles as per the unified transpose layout. See Figure 6.
             const tile_cols = 64 / T;
             const tile_rows = 8 / tile_cols;
-            const lanes_per_row = 1024 / @bitSizeOf(MM);
 
             // Loop over the lanes of the arrangement.
-            for (0..lanes_per_row) |l| {
+            for (0..nwords) |l| {
                 // Figure out which tile column we're in.
                 const col = l * m / 16;
 
@@ -117,10 +116,52 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
             break :blk _offsets;
         };
 
-        pub fn pairwise(comptime Codec: type) type {
+        /// TODO(ngates): should this use the transpose ordering? Not sure it actually makes a difference?
+        /// Maybe to cache locality?
+        pub fn Elementwise(comptime Codec: type) type {
             return struct {
+                const Self = @This();
+
+                codec: Codec,
+
+                pub fn init(codec: Codec) Self {
+                    return .{ .codec = codec };
+                }
+
+                pub fn encode(self: Self, in: *const Vector, out: *Vector) void {
+                    @setEvalBranchQuota(8192);
+
+                    inline for (mm_offsets) |offset| {
+                        const next: MM = load_mm(in, offset / m);
+                        const result = self.codec.encode(next);
+                        store_mm(out, offset / m, result);
+                    }
+                }
+
+                pub fn decode(self: Self, in: *const Vector, out: *Vector) void {
+                    @setEvalBranchQuota(8192);
+
+                    inline for (mm_offsets) |offset| {
+                        const next: MM = load_mm(in, offset / m);
+                        const result = self.codec.decode(next);
+                        store_mm(out, offset / m, result);
+                    }
+                }
+            };
+        }
+
+        pub fn Pairwise(comptime Codec: type) type {
+            return struct {
+                const Self = @This();
+
+                codec: Codec,
+
+                pub fn init(codec: Codec) Self {
+                    return .{ .codec = codec };
+                }
+
                 /// Note: it is assumed the base is already transposed.
-                pub fn encode(base: *const [S]E, in: *const Vector, out: *Vector) void {
+                pub fn encode(self: Self, base: *const [S]E, in: *const Vector, out: *Vector) void {
                     @setEvalBranchQuota(8192);
                     var prev: MM = undefined;
 
@@ -130,13 +171,13 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
                         }
 
                         const next: MM = load_mm(in, offset / m);
-                        const result = Codec.encode(prev, next);
+                        const result = self.codec.encode(prev, next);
                         store_mm(out, offset / m, result);
                         prev = next;
                     }
                 }
 
-                pub fn decode(base: *const [S]E, in: *const Vector, out: *Vector) void {
+                pub fn decode(self: Self, base: *const [S]E, in: *const Vector, out: *Vector) void {
                     @setEvalBranchQuota(8192);
                     var prev: MM = undefined;
 
@@ -146,26 +187,26 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
                         }
 
                         const next: MM = load_mm(in, offset / m);
-                        const result = Codec.decode(prev, next);
+                        const result = self.codec.decode(prev, next);
                         store_mm(out, offset / m, result);
                         prev = result;
                     }
                 }
-
-                /// Load the physical nth MM word from the input buffer.
-                fn load_mm(ptr: anytype, n: usize) MM {
-                    const Array = @typeInfo(@TypeOf(ptr)).Pointer.child;
-                    const words: *const [@sizeOf(Array) / @sizeOf(MM)][@sizeOf(MM)]u8 = @ptrCast(ptr);
-                    return @bitCast(words[n]);
-                }
-
-                /// Store the physical nth MM word into the output buffer.
-                fn store_mm(ptr: anytype, n: usize, value: MM) void {
-                    const Array = @typeInfo(@TypeOf(ptr)).Pointer.child;
-                    const words: *[@sizeOf(Array) / @sizeOf(MM)][@sizeOf(MM)]u8 = @ptrCast(ptr);
-                    words[n] = @bitCast(value);
-                }
             };
+        }
+
+        /// Load the physical nth MM word from the input buffer.
+        pub fn load_mm(ptr: anytype, n: usize) MM {
+            const Array = @typeInfo(@TypeOf(ptr)).Pointer.child;
+            const words: *const [@sizeOf(Array) / @sizeOf(MM)][@sizeOf(MM)]u8 = @ptrCast(ptr);
+            return @bitCast(words[n]);
+        }
+
+        /// Store the physical nth MM word into the output buffer.
+        pub fn store_mm(ptr: anytype, n: usize, value: MM) void {
+            const Array = @typeInfo(@TypeOf(ptr)).Pointer.child;
+            const words: *[@sizeOf(Array) / @sizeOf(MM)][@sizeOf(MM)]u8 = @ptrCast(ptr);
+            words[n] = @bitCast(value);
         }
 
         /// Load the logical nth 1024bit word from the input buffer. Respecting the unified transpose order.
@@ -417,4 +458,5 @@ comptime {
     // std.testing.refAllDecls(@import("bitpacking_demo.zig"));
     // std.testing.refAllDecls(@import("bitpacking.zig"));
     std.testing.refAllDecls(@import("delta.zig"));
+    std.testing.refAllDecls(@import("ffor.zig"));
 }
