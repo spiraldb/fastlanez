@@ -30,10 +30,8 @@ test "fastlanez delta" {
 
     actual = FL.untranspose(actual);
 
-    std.debug.print("ACTUAL {any}\n", .{actual});
-
     for (0..1024) |i| {
-        // Since fastlanes processes based on 16 blocks, we expect a delta of i every 1024 / 16 = 64 elements.
+        // We expecte a delta == i for every T'th element since it is compared with the base vector.
         if (i % @bitSizeOf(T) == 0) {
             try std.testing.expectEqual(i, actual[i]);
         } else {

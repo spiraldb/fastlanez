@@ -87,7 +87,8 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
                     // Within each tile, loop over the 8 element rows.
                     for (0..8) |r| {
                         // Compute a element offset based on the unified tranpose order.
-                        _offsets[offset] = ((tile * 16) + (r * 128) + elem);
+                        _offsets[offset] = ((ORDER[tile] * 16) + (r * 128) + elem);
+                        // @compileLog(l, col, tr, tile, _offsets[offset]);
                         offset += 1;
                     }
                 }
@@ -115,10 +116,10 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
                 const elem = (l * M) % 16;
 
                 // Compute which tile we're in.
-                const tile = ORDER[col] / tile_rows;
+                const tile = ORDER[col];
 
                 // Compute a element offset based on the unified tranpose order.
-                _offsets[offset] = ((tile * 16) + elem);
+                _offsets[offset] = ((ORDER[tile] * 16 / tile_rows) + elem);
                 offset += 1;
             }
 
@@ -127,39 +128,28 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
 
         pub fn pairwise(comptime Codec: type) type {
             return struct {
+                /// Note: it is assumed the base is already transposed.
                 pub fn encode(base: *const [S]E, in: *const Vector, out: *Vector) void {
-                    const std = @import("std");
                     var prev: MM = undefined;
 
-                    @compileLog(mm_offsets);
-
-                    inline for (mm_offsets, 0..) |o, i| {
+                    inline for (mm_offsets, 0..) |offset, i| {
                         if (i % T == 0) {
-                            prev = load_mm(base, mm_base_offsets[i / T]);
-                            std.debug.print("BASE {any}\n", .{prev});
+                            prev = load_mm(base, i / T);
                         }
 
-                        const next: MM = load_mm(in, o / M);
+                        const next: MM = load_mm(in, offset / M);
                         const result = Codec.encode(prev, next);
-                        std.debug.print("Prev {any} Next {any} => {any}\n", .{ prev, next, result });
-                        store_mm(out, o / M, result);
+                        store_mm(out, offset / M, result);
                         prev = next;
                     }
                 }
 
                 pub fn decode(base: *const [S]E, in: *const Vector, out: *Vector) void {
-                    @setEvalBranchQuota(64_000);
-
                     var prev: MM = undefined;
 
-                    // TODO(ngates): break this into two loops and avoid inlining the outer?
-                    inline for (0..N) |n| {
-                        // Loop over each lane.
-                        const offset = untranspose_mask[n];
-
-                        if (n % 8 == 0) {
-                            // Start a new loop;
-                            prev = load_mm(base, offset / N);
+                    inline for (mm_offsets, 0..) |offset, i| {
+                        if (i % T == 0) {
+                            prev = load_mm(base, i / T);
                         }
 
                         const next: MM = load_mm(in, offset / M);
