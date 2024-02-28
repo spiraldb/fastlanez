@@ -34,6 +34,9 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
         /// The virtual 1024-bit SIMD word.
         pub const MM1024 = [nwords]ISA.MM;
 
+        pub const NLanes = 1024 / @bitSizeOf(MM);
+        pub const NRows = T;
+
         // The number of MM words in an MM1024 word.
         const nwords = 1024 / @bitSizeOf(MM);
         /// The number of elements in an MM word.
@@ -52,10 +55,32 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
             break :blk _offsets;
         };
 
+        /// Element offsets for a single lane.
+        pub const lane_offsets: [T]usize = blk: {
+            var _offsets: [T]usize = undefined;
+            var offset = 0;
+
+            // The arrangement of the tiles as per the unified transpose layout. See Figure 6.
+            const tile_cols = 64 / T;
+            const tile_rows = 8 / tile_cols;
+
+            for (0..tile_rows) |tile| {
+                // Within each tile, loop over the 8 element rows.
+                for (0..8) |r| {
+                    // Compute a element offset based on the unified tranpose order.
+                    _offsets[offset] = (ORDER[tile] * 16) + (r * 128);
+                    // @compileLog(l, col, tr, tile, _offsets[offset]);
+                    offset += 1;
+                }
+            }
+
+            break :blk _offsets;
+        };
+
         /// MM offsets required to iterate over a 1024 element vector.
-        const mm_offsets: [T * nwords]comptime_int = blk: {
+        pub const mm_offsets: [T * nwords]usize = blk: {
             @setEvalBranchQuota(8192);
-            var _offsets: [T * nwords]comptime_int = undefined;
+            var _offsets: [T * nwords]usize = undefined;
             var offset = 0;
 
             // The arrangement of the tiles as per the unified transpose layout. See Figure 6.
@@ -89,7 +114,7 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
         };
 
         /// The MM offsets within an S-element (1024-bit) base vector.
-        const mm_base_offsets: [nwords]comptime_int = blk: {
+        pub const mm_base_offsets: [nwords]comptime_int = blk: {
             var _offsets: [nwords]comptime_int = undefined;
             var offset = 0;
 
@@ -131,6 +156,7 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
                 pub fn encode(self: Self, in: *const Vector, out: *Vector) void {
                     @setEvalBranchQuota(8192);
 
+                    // TODO(ngates): extract the lane offset from the mm_offsets so we can loop over it at runtime.
                     inline for (mm_offsets) |offset| {
                         const next: MM = load_mm(in, offset / m);
                         const result = self.codec.encode(next);
@@ -195,15 +221,27 @@ pub fn FastLanez(comptime Element: type, comptime options: Options) type {
             };
         }
 
+        pub inline fn load_base(ptr: anytype, lane: comptime_int) MM {
+            return load_mm(ptr, lane);
+        }
+
+        pub inline fn load_transposed(ptr: anytype, lane: comptime_int, row: comptime_int) MM {
+            return load_mm(ptr, mm_offsets[(lane * T) + row] / m);
+        }
+
+        pub inline fn store_transposed(ptr: anytype, lane: comptime_int, row: comptime_int, word: MM) void {
+            return store_mm(ptr, mm_offsets[(lane * T) + row] / m, word);
+        }
+
         /// Load the physical nth MM word from the input buffer.
-        pub fn load_mm(ptr: anytype, n: usize) MM {
+        pub inline fn load_mm(ptr: anytype, n: usize) MM {
             const Array = @typeInfo(@TypeOf(ptr)).Pointer.child;
             const words: *const [@sizeOf(Array) / @sizeOf(MM)][@sizeOf(MM)]u8 = @ptrCast(ptr);
             return @bitCast(words[n]);
         }
 
         /// Store the physical nth MM word into the output buffer.
-        pub fn store_mm(ptr: anytype, n: usize, value: MM) void {
+        pub inline fn store_mm(ptr: anytype, n: usize, value: MM) void {
             const Array = @typeInfo(@TypeOf(ptr)).Pointer.child;
             const words: *[@sizeOf(Array) / @sizeOf(MM)][@sizeOf(MM)]u8 = @ptrCast(ptr);
             words[n] = @bitCast(value);

@@ -6,7 +6,7 @@
     // See `zig fetch --save <url>` for a command-line interface for adding dependencies.
     .dependencies = .{
         .@"zig-cycleclock" = .{
-            .url = "https://github.com/fulcrum-so/zig-cycleclock/archive/refs/tags/0.0.2.tar.gz",
+            .url = "../zig-cycleclock",
             .hash = "12207d4cc840f5af45027833138f0e1f509ae55266e3a2dfc5a9140e70a998d42b0a",
         },
     },
