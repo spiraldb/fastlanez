@@ -25,6 +25,8 @@ jobs:
       - name: Zig Lint - Fmt
         run: zig fmt --check .
 
-      - name: Zig Build
-        shell: bash
+      - name: Zig Test
         run: zig build test
+
+      - name: Zig Bench
+        run: zig build bench
