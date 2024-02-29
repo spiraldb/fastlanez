@@ -1,0 +1,15 @@
+.{
+    .name = "fastlanez",
+    .version = "0.0.0",
+    .minimum_zig_version = "0.11.0",
+
+    // See `zig fetch --save <url>` for a command-line interface for adding dependencies.
+    .dependencies = .{
+        .@"zig-cycleclock" = .{
+            .url = "https://github.com/fulcrum-so/zig-cycleclock/archive/refs/tags/0.0.3.tar.gz",
+            .hash = "1220a3ceb465eef08008c61b2b198336328e033a9e9b9d24cc169e4743abd1ac79bb",
+        },
+    },
+
+    .paths = .{""},
+}
