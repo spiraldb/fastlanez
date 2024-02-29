@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [ "develop" ]
+  pull_request:
+    branches: [ "develop" ]
+  workflow_dispatch: { }
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: 'test'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Zig Setup
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: "0.12.0-dev.2541+894493549"
+
+      - name: Zig Lint - Fmt
+        run: zig fmt --check .
+
+      - name: Zig Build
+        shell: bash
+        run: zig build test

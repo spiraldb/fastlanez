@@ -46,19 +46,19 @@ With this order it is possible to make adjacent cells appear in adjacent SIMD wo
 register is. For example, a vector of u32s will be rearranged and then iterated such that adjacent words look like this:
 
 ```
-u32 with 64-bit SIMD
+2xu32 64-bit SIMD
 { 0, 64 }
 { 1, 65 }
 { 2, 66 }
 ...
 
-u32 with 128-bit SIMD
+4xu32 128-bit SIMD
 { 0, 64, 128, 192 }
 { 1, 65, 129, 193 }
 { 2, 66, 130, 194 }
 ...
 
-u32 with 512-bit SIMD
+16xu32 512-bit SIMD
 { 0, 64, 128, 192, 256, 320, 384, 448, 512, 576, 640, 704, 768, 832, 896, 960 }
 { 1, 65, 129, 193, 257, 321, 385, 449, 513, 577, 641, 705, 769, 833, 897, 961 }
 { 2, 66, 130, 194, 258, 322, 386, 450, 514, 578, 642, 706, 770, 834, 898, 962 }
@@ -177,6 +177,3 @@ As with all benchmarks, take the results with a pinch of salt.
 > I found the performance of benchmarks varies greatly depending on whether the inputs and outputs are stack allocated or
   heap allocated. I was surprised to find that often heap allocation was significantly faster than stack allocation.
   If anyone happens to know why, please do let me know!
-
-The following plot shows the performance vs the original FastLanes repository for all bit unpacking kernels on an M2 Mac:
-
