@@ -166,6 +166,12 @@ The header file requires `zig.h` which is located in the `lib_dir` output by run
 
 This process should improve as https://github.com/ziglang/zig/issues/13528 is resolved.
 
+## Installing Zig
+
+Running `./zigup` will download and install the zig version specified in the `.zig-version` file. We recommend adding
+`$HOME/.zig/zig-latest` to your `PATH`.
+
+
 ## Python Library
 
 TODO: this library will be made available as a Python library using [Ziggy Pydust](https://github.com/fulcrum-so/ziggy-pydust).
