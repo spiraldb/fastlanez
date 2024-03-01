@@ -30,6 +30,18 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    // Static Library
+    const lib = b.addStaticLibrary(.{
+        .name = "fastlanez",
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = .{ .path = "src/lib.zig" },
+    });
+    b.installArtifact(lib);
+    // Ideally we would use dlib.getEmittedH(), but https://github.com/ziglang/zig/issues/18497
+    const lib_header = b.addInstallFile(.{ .path = "zig-cache/fastlanez.h" }, "include/fastlanez.h");
+    b.getInstallStep().dependOn(&lib_header.step);
+
     // Unit Tests
     const unit_tests = b.addTest(.{
         .root_source_file = .{ .path = "src/fastlanez.zig" },
