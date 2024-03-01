@@ -38,15 +38,20 @@ pub fn Bench(comptime name: []const u8, comptime variant: []const u8, comptime o
                 unit.run();
             }
 
+            var timer = try std.time.Timer.start();
             const start = cycleclock.now();
             for (0..options.iterations) |_| {
                 unit.run();
             }
             const stop = cycleclock.now();
+            const elapsed_ns = timer.read();
             const cycles = stop - start;
 
+            const billion_tuples_per_second = 1024.0 * @as(f64, @floatFromInt(options.iterations)) / @as(f64, @floatFromInt(elapsed_ns));
+            std.debug.print(",{d:.2}", .{billion_tuples_per_second});
+
             if (cycles == 0) {
-                std.debug.print(",0  # failed to measure cycles\n", .{});
+                std.debug.print(",0.0,0  # failed to measure cycles\n", .{});
                 return;
             } else {
                 const cycles_per_tuple = @as(f64, @floatFromInt(cycles)) / @as(f64, @floatFromInt(1024 * options.iterations));
