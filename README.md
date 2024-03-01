@@ -159,10 +159,12 @@ of this library.
 Another possible advantage to the FastLanes loop ordering is that we can avoid unrolling the outer SIMD word loop,
 resulting in potentially much smaller code size for minimal impact on performance.
 
-
 ## C Library
 
-TODO: this library will be made available as a C library.
+Running `zig build lib` will generate a static C library in `zig-out/lib` and a header file in `zig-out/include`.
+The header file requires `zig.h` which is located in the `lib_dir` output by running `zig env`.
+
+This process should improve as https://github.com/ziglang/zig/issues/13528 is resolved.
 
 ## Python Library
 
