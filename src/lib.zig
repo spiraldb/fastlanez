@@ -5,18 +5,10 @@ const std = @import("std");
 // BitPacking
 comptime {
     const BitPacking = @import("./bitpacking.zig").BitPacking;
-    for (.{u8}) |E| {
+    for (.{ u8, u16, u32, u64 }) |E| {
         const FL = fl.FastLanez(E);
 
-        const bit_packing_widths = blk: {
-            var widths_: [FL.T]u8 = undefined;
-            for (0..FL.T) |i| {
-                widths_[i] = @intCast(i);
-            }
-            break :blk widths_;
-        };
-
-        for (bit_packing_widths) |W| {
+        for (1..FL.T) |W| {
             const Wrapper = struct {
                 fn encode(in: *const FL.Vector, out: *FL.PackedBytes(W)) callconv(.C) void {
                     @call(.always_inline, BitPacking(FL).encode, .{ W, in, out });
