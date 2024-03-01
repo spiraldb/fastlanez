@@ -161,7 +161,7 @@ resulting in potentially much smaller code size for minimal impact on performanc
 
 ## C Library
 
-Running `zig build` will generate a static C library in `zig-out/lib` and a header file in `zig-out/include`.
+Running `zig build lib` will generate a static C library in `zig-out/lib` and a header file in `zig-out/include`.
 The header file requires `zig.h` which is located in the `lib_dir` output by running `zig env`.
 
 This process should improve as https://github.com/ziglang/zig/issues/13528 is resolved.

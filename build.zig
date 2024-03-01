@@ -37,14 +37,16 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .root_source_file = .{ .path = "src/lib.zig" },
     });
-    b.installArtifact(lib);
-    // Ideally we would use dlib.getEmittedH(), but https://github.com/ziglang/zig/issues/18497
-    _ = lib.getEmittedH(); // Needed to trigger generation
-    const lib_header = b.addInstallFile(.{ .path = "zig-cache/fastlanez.h" }, "include/fastlanez.h");
-    lib_header.step.dependOn(&lib.step);
-    b.getInstallStep().dependOn(&lib_header.step);
+    const lib_install = b.addInstallArtifact(lib, .{});
 
-    // const lib_header_file = .{ .step = &lib.step, .path = "/Users/ngates/git/fastlanez/zig-cache/fastlanez.h" };
+    // Ideally we would use dlib.getEmittedH(), but https://github.com/ziglang/zig/issues/18497
+    _ = lib.getEmittedH(); // Needed to trigger header generation
+    const lib_header = b.addInstallFile(.{ .path = "zig-cache/fastlanez.h" }, "include/fastlanez.h");
+    lib_header.step.dependOn(&lib_install.step);
+
+    const lib_step = b.step("lib", "Build static C library");
+    lib_step.dependOn(&lib_header.step);
+    lib_step.dependOn(&lib_install.step);
 
     // Unit Tests
     const unit_tests = b.addTest(.{
