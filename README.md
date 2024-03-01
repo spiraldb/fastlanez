@@ -11,7 +11,7 @@ Supported Codecs:
 
 Requires Zig trunk >= 0.12.0-dev.2541
 
-Benchmarks can be run with `zig build bench`
+Benchmarks can be run with `zig build bench -Doptimize=ReleaseSafe`
 
 ## What is FastLanes?
 
