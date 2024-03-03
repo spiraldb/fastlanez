@@ -223,6 +223,10 @@ pub fn FastLanez(comptime Element: type) type {
             return (1 << bits) - 1;
         }
 
+        pub inline fn splat(value: E) MM1024 {
+            return @splat(value);
+        }
+
         pub inline fn add(a: MM1024, b: MM1024) MM1024 {
             return a +% b;
         }
@@ -273,6 +277,7 @@ test "fastlanez transpose" {
 comptime {
     const std = @import("std");
 
+    std.testing.refAllDecls(@import("alp.zig"));
     std.testing.refAllDecls(@import("bitpacking_u8_u3.zig"));
     std.testing.refAllDecls(@import("bitpacking.zig"));
     std.testing.refAllDecls(@import("delta.zig"));
