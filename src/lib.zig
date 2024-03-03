@@ -27,17 +27,15 @@ comptime {
     const ALP = @import("./alp.zig").ALP;
     for (.{ f32, f64 }) |E| {
         const A = ALP(E);
-
         const Wrapper = struct {
-            fn encode(in: *const [1024]E, e: u8, f: u8, out: *[1024]A.I, exceptions: *A.Exceptions) callconv(.C) void {
-                @call(.always_inline, A.encode, .{ in, e, f, out, exceptions });
+            fn encode(in: *const [1024]E, e: u8, f: u8, out: *[1024]A.I, exceptions: *[1024]E) callconv(.C) u32 {
+                return A.encode(in, e, f, out, exceptions);
             }
 
             fn decode(in: *const [1024]A.I, e: u8, f: u8, out: *[1024]E) callconv(.C) void {
-                @call(.always_inline, A.decode, .{ in, e, f, out });
+                return A.decode(in, e, f, out);
             }
         };
-
         @export(Wrapper.encode, .{ .name = "fl_alp_encode" ++ @typeName(E) });
         @export(Wrapper.decode, .{ .name = "fl_alp_decode" ++ @typeName(E) });
     }

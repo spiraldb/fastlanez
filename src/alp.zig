@@ -3,6 +3,8 @@ const math = std.math;
 const fl = @import("./fastlanez.zig");
 
 pub fn ALP(comptime E: type) type {
+    @setFloatMode(.Optimized);
+
     if (@typeInfo(E) != .Float) {
         @compileError("ALP only supports floating point");
     }
@@ -12,15 +14,10 @@ pub fn ALP(comptime E: type) type {
         const FL = fl.FastLanez(E);
         const FLI = fl.FastLanez(I);
 
-        pub const Exceptions = struct {
-            exceptions: FL.Vector,
-            count: usize,
-        };
-
         /// Given 1024 floats, encode them as f * 10^e * 10^(-f)
-        pub fn encode(in: *const FL.Vector, e: u8, f: u8, out: *FLI.Vector, exceptions: *Exceptions) void {
-            @setFloatMode(.Optimized);
-            exceptions.count = 0;
+        /// Returns the number of exceptions.
+        pub fn encode(in: *const FL.Vector, e: u8, f: u8, out: *FLI.Vector, exceptions: *FL.Vector) u32 {
+            var exceptions_count: u32 = 0;
 
             inline for (0..FL.T) |i| {
                 const next = FL.load(in, i);
@@ -31,12 +28,13 @@ pub fn ALP(comptime E: type) type {
                 const decoded = encoded * FL.splat(F10[f]) * FL.splat(i_F10[e]);
                 const exception_mask = decoded != next;
 
-                exceptions.count += @reduce(.Add, @as(@Vector(FL.S, u8), @intFromBool(exception_mask)));
+                exceptions_count += @reduce(.Add, @as(@Vector(FL.S, u8), @intFromBool(exception_mask)));
                 FL.store(&exceptions.exceptions, i, @select(FL.E, exception_mask, next, FL.splat(0)));
 
                 // Mask out the exceptions from the result so they don't affect bit-packing.
                 FLI.store(out, i, @intFromFloat(@select(FL.E, exception_mask, FLI.splat(0.0), encoded)));
             }
+            return exceptions_count;
         }
 
         /// Given 1024 floats, decode them as f * 10^f * 10^(-e)
