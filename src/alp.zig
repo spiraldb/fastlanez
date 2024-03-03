@@ -1,16 +1,17 @@
 const std = @import("std");
 const math = std.math;
+const fl = @import("./fastlanez.zig");
 
 pub fn ALP(comptime E: type) type {
     if (@typeInfo(E) != .Float) {
         @compileError("ALP only supports floating point");
     }
 
-    const fl = @import("./fastlanez.zig");
-    const FL = fl.FastLanez(E);
-    const FLI = fl.FastLanez(std.meta.Int(.signed, FL.T));
-
     return struct {
+        pub const I = std.meta.Int(.signed, FL.T);
+        const FL = fl.FastLanez(E);
+        const FLI = fl.FastLanez(I);
+
         pub const Exceptions = struct {
             exceptions: FL.Vector,
             count: usize,
