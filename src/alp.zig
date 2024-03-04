@@ -29,10 +29,10 @@ pub fn ALP(comptime E: type) type {
                 const exception_mask = decoded != next;
 
                 exceptions_count += @reduce(.Add, @as(@Vector(FL.S, u8), @intFromBool(exception_mask)));
-                FL.store(&exceptions.exceptions, i, @select(FL.E, exception_mask, next, FL.splat(0)));
+                FL.store(&exceptions, i, @select(FL.E, exception_mask, next, FL.splat(0)));
 
                 // Mask out the exceptions from the result so they don't affect bit-packing.
-                FLI.store(out, i, @intFromFloat(@select(FL.E, exception_mask, FLI.splat(0.0), encoded)));
+                FLI.store(out, i, @select(FL.E, exception_mask, FLI.splat(0), @as(FLI.MM1024, @intFromFloat(encoded))));
             }
             return exceptions_count;
         }
