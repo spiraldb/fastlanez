@@ -11,8 +11,13 @@ comptime {
                 // TODO(ngates): check the performance of this. We may want tranpose to operate on pointers.
                 out.* = FL.transpose(in.*);
             }
+
+            fn untranspose(in: *const FL.Vector, out: *FL.Vector) callconv(.C) void {
+                out.* = FL.untranspose(in.*);
+            }
         };
         @export(Wrapper.transpose, .{ .name = "fl_transpose_" ++ @typeName(E) });
+        @export(Wrapper.untranspose, .{ .name = "fl_untranspose_" ++ @typeName(E) });
     }
 }
 
