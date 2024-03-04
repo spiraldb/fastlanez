@@ -2,6 +2,20 @@
 const fl = @import("./fastlanez.zig");
 const std = @import("std");
 
+// Transpose
+comptime {
+    for (.{ u8, u16, u32, u64 }) |E| {
+        const FL = fl.FastLanez(E);
+        const Wrapper = struct {
+            fn transpose(in: *const FL.Vector, out: *FL.Vector) callconv(.C) void {
+                // TODO(ngates): check the performance of this. We may want tranpose to operate on pointers.
+                out.* = FL.transpose(in.*);
+            }
+        };
+        @export(Wrapper.transpose, .{ .name = "fl_transpose_" ++ @typeName(E) });
+    }
+}
+
 // BitPacking
 comptime {
     const BitPacking = @import("./bitpacking.zig").BitPacking;
@@ -19,5 +33,27 @@ comptime {
                 .name = "fl_bitpack_" ++ @typeName(E) ++ "_" ++ @typeName(std.meta.Int(.unsigned, W)),
             });
         }
+    }
+}
+
+// Delta
+comptime {
+    const Delta = @import("./delta.zig").Delta;
+    for (.{ u8, i8, u16, i16, u32, i32, u64, i64 }) |E| {
+        const FL = fl.FastLanez(E);
+        const D = Delta(FL);
+
+        const Wrapper = struct {
+            fn encode(base: *const FL.BaseVector, in: *const FL.Vector, out: *FL.Vector) callconv(.C) void {
+                D.encode(base, in, out);
+            }
+
+            fn decode(base: *const FL.BaseVector, in: *const FL.Vector, out: *FL.Vector) callconv(.C) void {
+                D.decode(base, in, out);
+            }
+        };
+
+        @export(Wrapper.encode, .{ .name = "fl_delta_encode_" ++ @typeName(E) });
+        @export(Wrapper.decode, .{ .name = "fl_delta_decode_" ++ @typeName(E) });
     }
 }
