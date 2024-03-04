@@ -30,14 +30,15 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    var shell = Shell.create(b.allocator) catch unreachable;
-    defer shell.destroy();
+    const tag = git_tag(b.allocator) catch @panic("No git tag");
+    const version = std.SemanticVersion.parse(tag) catch (std.SemanticVersion.parse("0.0.0") catch unreachable);
 
     // Static Library
     const lib = b.addStaticLibrary(.{
         .name = "fastlanez",
         .target = target,
         .optimize = optimize,
+        .version = version,
         .root_source_file = .{ .path = "src/lib.zig" },
     });
     lib.bundle_compiler_rt = true;
@@ -57,14 +58,15 @@ pub fn build(b: *std.Build) void {
         .name = "fastlanez",
         .target = target,
         .optimize = optimize,
+        .version = version,
         .root_source_file = .{ .path = "src/lib.zig" },
     });
     dylib.bundle_compiler_rt = true;
     const dylib_install = b.addInstallArtifact(dylib, .{});
 
     const dylib_step = b.step("dylib", "Build dynamic C library");
+    dylib_step.dependOn(&lib_header.step);
     dylib_step.dependOn(&dylib_install.step);
-    dylib_step.dependOn(lib_step);
 
     // Unit Tests
     const unit_tests = b.addTest(.{
@@ -92,19 +94,16 @@ pub fn build(b: *std.Build) void {
     bench_step.dependOn(&run_bench.step);
 }
 
-fn git_tag(allocator: *std.mem.Allocator) ![]const u8 {
+fn git_tag(allocator: std.mem.Allocator) ![]const u8 {
     const result = try std.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{ "git", "describe", "--tags", "--always" },
     });
     if (result.term.Exited != 0) {
-        std.debug.print("Failed to execute {s}:\n{s}\n", .{ code, result.stderr });
+        std.debug.print("Failed to discover git tag:\n{s}\n", .{result.stderr});
         std.process.exit(1);
     }
     allocator.free(result.stderr);
-    return result.stdout;
-
-    // --always is necessary in cases where we haven't yet `git fetch`-ed.
-    const stdout = try shell.exec_stdout("git describe --tags --always", .{});
-    return stdout;
+    // Strip trailing newline
+    return result.stdout[0 .. result.stdout.len - 1];
 }
