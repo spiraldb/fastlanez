@@ -99,9 +99,9 @@ test "alp" {
     const floats = .{1.23} ** 1024;
 
     var encoded: [1024]i64 = undefined;
-    var exceptions: A.Exceptions = undefined;
-    A.encode(&floats, e, f, &encoded, &exceptions);
-    try std.testing.expectEqual(0, exceptions.count);
+    var exceptions: [1024]f64 = undefined;
+    const exceptions_count = A.encode(&floats, e, f, &encoded, &exceptions);
+    try std.testing.expectEqual(0, exceptions_count);
 
     var decoded: [1024]f64 = undefined;
     A.decode(&encoded, e, f, &decoded);
