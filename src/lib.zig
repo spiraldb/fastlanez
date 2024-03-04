@@ -49,8 +49,13 @@ comptime {
         const D = Delta(FL);
 
         const Wrapper = struct {
-            fn encode(base: *const FL.BaseVector, in: *const FL.Vector, out: *FL.Vector) callconv(.C) void {
+            fn encode(
+                in: *const FL.Vector,
+                base: *FL.BaseVector,
+                out: *FL.Vector,
+            ) callconv(.C) void {
                 D.encode(base, in, out);
+                FL.store(base, 0, FL.load(out, FL.T - 1));
             }
 
             fn decode(base: *const FL.BaseVector, in: *const FL.Vector, out: *FL.Vector) callconv(.C) void {
