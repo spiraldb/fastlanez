@@ -37,6 +37,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .root_source_file = .{ .path = "src/lib.zig" },
     });
+    lib.bundle_compiler_rt = true;
+    lib.pie = true;
     const lib_install = b.addInstallArtifact(lib, .{});
 
     // Ideally we would use dlib.getEmittedH(), but https://github.com/ziglang/zig/issues/18497
