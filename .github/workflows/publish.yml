@@ -23,7 +23,7 @@ jobs:
         run: zig build test
 
       - name: Zig Dylib
-        run: zig build dylib -Drelease-safe
+        run: zig build dylib -Doptimize=ReleaseSafe
 
       - name: Release
         uses: softprops/action-gh-release@v1
