@@ -41,17 +41,13 @@ pub fn build(b: *std.Build) void {
         .version = version,
         .root_source_file = .{ .path = "src/lib.zig" },
     });
+    _ = lib.getEmittedH(); // Needed to trigger header generation
     lib.bundle_compiler_rt = true;
     lib.pie = true;
     const lib_install = b.addInstallArtifact(lib, .{});
-
     // Ideally we would use dlib.getEmittedH(), but https://github.com/ziglang/zig/issues/18497
-    _ = lib.getEmittedH(); // Needed to trigger header generation
     const lib_header = b.addInstallFile(.{ .path = "zig-cache/fastlanez.h" }, "include/fastlanez.h");
-
-    const lib_step = b.step("lib", "Build static C library");
-    lib_step.dependOn(&lib_header.step);
-    lib_step.dependOn(&lib_install.step);
+    lib_header.step.dependOn(&lib.step);
 
     // Dynamic Library
     const dylib = b.addSharedLibrary(.{
@@ -61,8 +57,15 @@ pub fn build(b: *std.Build) void {
         .version = version,
         .root_source_file = .{ .path = "src/lib.zig" },
     });
+    _ = lib.getEmittedH(); // Needed to trigger header generation
     dylib.bundle_compiler_rt = true;
     const dylib_install = b.addInstallArtifact(dylib, .{});
+    const dylib_header = b.addInstallFile(.{ .path = "zig-cache/fastlanez.h" }, "include/fastlanez.h");
+    dylib_header.step.dependOn(&dylib.step);
+
+    const lib_step = b.step("lib", "Build static C library");
+    lib_step.dependOn(&lib_header.step);
+    lib_step.dependOn(&lib_install.step);
 
     const dylib_step = b.step("dylib", "Build dynamic C library");
     dylib_step.dependOn(&lib_header.step);
