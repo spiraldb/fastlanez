@@ -17,10 +17,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Zig Setup
-        uses: goto-bus-stop/setup-zig@v2
-        with:
-          version: "0.12.0-dev.2541+894493549"
+      - name: Setup Zig
+        shell: bash
+        run: |
+          curl -sL "https://ziglang.org/builds/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" > ${{ runner.temp }}/zig.tar.xz
+          tar -xf ${{ runner.temp }}/zig.tar.xz -C ${{ runner.temp }}
+          echo "PATH=${{ runner.temp }}/zig-linux-x86_64-${ZIG_VERSION}:$PATH" >> $GITHUB_ENV
+        env:
+          ZIG_VERSION: "0.12.0-dev.2541+894493549"
 
       - name: Zig Lint - Fmt
         run: zig fmt --check .
