@@ -32,10 +32,17 @@ comptime {
                 fn encode(in: *const FL.Vector, out: *FL.PackedBytes(W)) callconv(.C) void {
                     @call(.always_inline, BitPacking(FL).encode, .{ W, in, out });
                 }
+
+                fn decode(in: *const FL.PackedBytes(W), out: *FL.Vector) callconv(.C) void {
+                    @call(.always_inline, BitPacking(FL).decode, .{ W, in, out });
+                }
             };
 
             @export(Wrapper.encode, .{
                 .name = "fl_bitpack_" ++ @typeName(E) ++ "_" ++ @typeName(std.meta.Int(.unsigned, W)),
+            });
+            @export(Wrapper.decode, .{
+                .name = "fl_bitunpack_" ++ @typeName(E) ++ "_" ++ @typeName(std.meta.Int(.unsigned, W)),
             });
         }
     }
