@@ -185,8 +185,8 @@ pub fn FastLanez(comptime Element: type) type {
                     self.t += 1;
 
                     var tmp: MM1024 = undefined;
-                    if (self.input_idx == 0) {
-                        tmp = load(input, 0);
+                    if (self.bit_idx % T == 0) {
+                        tmp = load(input, self.input_idx);
                         self.input_idx += 1;
                     } else {
                         tmp = state;
@@ -197,7 +197,7 @@ pub fn FastLanez(comptime Element: type) type {
 
                     var next: MM1024 = and_rshift(tmp, shift_bits, bitmask(mask_bits));
 
-                    if (mask_bits != Width and self.input_idx < Width) {
+                    if (mask_bits != Width) {
                         tmp = load(input, self.input_idx);
                         self.input_idx += 1;
 

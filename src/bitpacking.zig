@@ -60,11 +60,11 @@ test "bitpack range" {
     const fl = @import("./fastlanez.zig");
     const BP = BitPacking(fl.FastLanez(u8));
 
-    const W = 3;
+    const W = 6;
 
     var ints: [1024]u8 = undefined;
     for (0..1024) |i| {
-        ints[i] = @intCast(i % 7);
+        ints[i] = @intCast(i % std.math.maxInt(std.meta.Int(.unsigned, W)));
     }
 
     var packed_ints: [128 * W]u8 = undefined;
