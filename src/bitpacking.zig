@@ -54,3 +54,23 @@ test "bitpack" {
     BP.decode(3, &packed_ints, &output);
     try std.testing.expectEqual(.{2} ** 1024, output);
 }
+
+test "bitpack range" {
+    const std = @import("std");
+    const fl = @import("./fastlanez.zig");
+    const BP = BitPacking(fl.FastLanez(u8));
+
+    const W = 3;
+
+    var ints: [1024]u8 = undefined;
+    for (0..1024) |i| {
+        ints[i] = @intCast(i % 7);
+    }
+
+    var packed_ints: [128 * W]u8 = undefined;
+    BP.encode(W, &ints, &packed_ints);
+
+    var output: [1024]u8 = undefined;
+    BP.decode(W, &packed_ints, &output);
+    try std.testing.expectEqual(ints, output);
+}
