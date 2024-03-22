@@ -62,7 +62,7 @@ comptime {
                 out: *FL.Vector,
             ) callconv(.C) void {
                 D.encode(base, in, out);
-                FL.store(base, 0, FL.load(in, FL.T - 1));
+                FL.store(base, 0, FL.load_transposed(in, FL.T - 1));
             }
 
             fn decode(in: *const FL.Vector, base: *const FL.BaseVector, out: *FL.Vector) callconv(.C) void {
