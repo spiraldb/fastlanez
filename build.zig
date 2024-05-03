@@ -63,6 +63,17 @@ pub fn build(b: *std.Build) void {
     const dylib_header = b.addInstallFile(.{ .path = "zig-cache/fastlanez.h" }, "include/fastlanez.h");
     dylib_header.step.dependOn(&dylib.step);
 
+    // Freestanding Executable (required for WASM)
+    const freestanding = b.addExecutable(.{
+        .name = "fastlanez",
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = .{ .path = "src/lib.zig" },
+    });
+    freestanding.rdynamic = true;
+    freestanding.entry = .disabled;
+    const freestanding_install = b.addInstallArtifact(freestanding, .{});
+
     const lib_step = b.step("lib", "Build static C library");
     lib_step.dependOn(&lib_header.step);
     lib_step.dependOn(&lib_install.step);
@@ -70,6 +81,9 @@ pub fn build(b: *std.Build) void {
     const dylib_step = b.step("dylib", "Build dynamic C library");
     dylib_step.dependOn(&lib_header.step);
     dylib_step.dependOn(&dylib_install.step);
+
+    const freestanding_step = b.step("freestanding", "Build a freestanding executable");
+    freestanding_step.dependOn(&freestanding_install.step);
 
     // Unit Tests
     const unit_tests = b.addTest(.{
