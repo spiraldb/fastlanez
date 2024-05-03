@@ -40,10 +40,10 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .version = version,
         .root_source_file = .{ .path = "src/lib.zig" },
+        .pic = true,
     });
     _ = lib.getEmittedH(); // Needed to trigger header generation
     lib.bundle_compiler_rt = true;
-    lib.pie = true;
     const lib_install = b.addInstallArtifact(lib, .{});
     // Ideally we would use dlib.getEmittedH(), but https://github.com/ziglang/zig/issues/18497
     const lib_header = b.addInstallFile(.{ .path = "zig-cache/fastlanez.h" }, "include/fastlanez.h");
@@ -56,6 +56,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .version = version,
         .root_source_file = .{ .path = "src/lib.zig" },
+        .pic = true,
     });
     _ = lib.getEmittedH(); // Needed to trigger header generation
     dylib.bundle_compiler_rt = true;
