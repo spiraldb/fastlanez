@@ -74,3 +74,5 @@ comptime {
         @export(Wrapper.decode, .{ .name = "fl_delta_decode_" ++ @typeName(E) });
     }
 }
+
+pub fn main() void {}
