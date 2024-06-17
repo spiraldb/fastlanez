@@ -1,3 +1,7 @@
+> [!WARNING]
+> This repository is deprecated, please see our Rust implementation: https://github.com/spiraldb/fastlanes
+
+
 # FastLanez
 
 A Zig implementation of the paper [Decoding >100 Billion Integers per Second with Scalar Code](https://www.vldb.org/pvldb/vol16/p2132-afroozeh.pdf).
